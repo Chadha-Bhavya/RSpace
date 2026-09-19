@@ -1,0 +1,6 @@
+
+# Only needed if you use OpenAIExtractorClient (extraction.py).
+# models.py, validation.py, matching.py, ranking.py, tests.py, and demo.py
+# (with MockExtractorClient) need nothing beyond the standard library.
+openai>=1.0.0
+ 
