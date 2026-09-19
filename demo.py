@@ -12,6 +12,12 @@ Nothing else in this file (or in matching.py / ranking.py) needs to
 change — that's the point of the ExtractorClient seam.
 """
 
+from dotenv import load_dotenv
+
+load_dotenv()  # no-op if you're only using MockExtractorClient below; picks up
+                # OPENAI_API_KEY / OPENAI_MODEL from .env automatically if you
+                # switch to OpenAIExtractorClient.
+
 from extraction import MockExtractorClient
 from matching import compute_match
 from models import UserProfile
