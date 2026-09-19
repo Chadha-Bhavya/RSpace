@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RSpace Companion</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body { background: #f7f2e9; color: #25322c; font: 20px/1.5 system-ui, sans-serif; margin: 0; }
+      main { margin: 0 auto; max-width: 720px; min-height: 100vh; padding: 3rem 1.25rem; text-align: center; }
+      h1 { font-size: clamp(2.2rem, 7vw, 3.5rem); margin: 0 0 .5rem; }
+      .intro { color: #526159; margin: 0 auto 2rem; max-width: 540px; }
+      #conversation { background: #176b57; border: 0; border-radius: 999px; box-shadow: 0 7px 18px #176b5730; color: white; cursor: pointer; font: inherit; font-size: 1.15rem; font-weight: 700; min-height: 72px; min-width: 230px; padding: 0 2rem; }
+      #conversation.stop { background: #8b3f3f; }
+      #status { font-weight: 650; min-height: 3rem; margin: 1.5rem 0; }
+      .pulse { animation: pulse 1.5s ease-in-out infinite; display: inline-block; }
+      @keyframes pulse { 50% { opacity: .45; transform: scale(.92); } }
+      .messages { display: grid; gap: 1rem; margin-top: 2rem; text-align: left; }
+      .card { background: white; border-radius: 18px; box-shadow: 0 4px 16px #2f463817; padding: 1rem 1.2rem; }
+      .card strong { color: #176b57; display: block; font-size: .9rem; letter-spacing: .04em; margin-bottom: .35rem; text-transform: uppercase; }
+      .card p { margin: 0; }
+      .hidden { display: none; }
+      audio { margin-top: 1.5rem; width: 100%; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>RSpace</h1>
+      <p class="intro">A gentle place to talk. Start once, then speak naturally whenever you’re ready.</p>
+      <button id="conversation">Start conversation</button>
+      <p id="status" aria-live="polite">I’m ready when you are.</p>
+      <section id="messages" class="messages hidden" aria-live="polite">
+        <div class="card"><strong>You said</strong><p id="transcript"></p></div>
+        <div class="card"><strong>RSpace</strong><p id="reply"></p></div>
+      </section>
+      <audio id="audio" playsinline></audio>
+    </main>
+
+    <script>
+      const button = document.querySelector('#conversation');
+      const status = document.querySelector('#status');
+      const messages = document.querySelector('#messages');
+      const transcriptElement = document.querySelector('#transcript');
+      const replyElement = document.querySelector('#reply');
+      const audio = document.querySelector('#audio');
+
+      let active = false;
+      let stream;
+      let recorder;
+      let audioContext;
+      let analyser;
+      let monitorFrame;
+      let chunks = [];
+      let heardSpeech = false;
+      let lastSpeechAt = 0;
+      let turnStartedAt = 0;
+      let currentAudioUrl;
+
+      button.addEventListener('click', () => active ? stopConversation() : startConversation());
+
+      async function startConversation() {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          });
+          audioContext = new AudioContext();
+          const source = audioContext.createMediaStreamSource(stream);
+          analyser = audioContext.createAnalyser();
+          analyser.fftSize = 2048;
+          source.connect(analyser);
+          active = true;
+          button.textContent = 'End conversation';
+          button.classList.add('stop');
+          startListeningTurn();
+        } catch (_) {
+          setStatus('I could not use the microphone. Please allow microphone access and try again.');
+        }
+      }
+
+      function stopConversation() {
+        active = false;
+        cancelAnimationFrame(monitorFrame);
+        if (recorder?.state === 'recording') recorder.stop();
+        stream?.getTracks().forEach(track => track.stop());
+        audio.pause();
+        window.speechSynthesis.cancel();
+        audioContext?.close();
+        button.textContent = 'Start conversation';
+        button.classList.remove('stop');
+        setStatus('Conversation ended. I’ll be here when you want to talk again.');
+      }
+
+      function startListeningTurn() {
+        if (!active) return;
+        chunks = [];
+        heardSpeech = false;
+        lastSpeechAt = 0;
+        turnStartedAt = performance.now();
+        recorder = new MediaRecorder(stream);
+        recorder.addEventListener('dataavailable', event => {
+          if (event.data.size) chunks.push(event.data);
+        });
+        recorder.addEventListener('stop', processTurn, { once: true });
+        recorder.start(250);
+        setStatus('Listening… Just speak naturally.', true);
+        monitorSilence();
+      }
+
+      function monitorSilence() {
+        if (!active || recorder?.state !== 'recording') return;
+        const samples = new Float32Array(analyser.fftSize);
+        analyser.getFloatTimeDomainData(samples);
+        const rms = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
+        const now = performance.now();
+
+        if (rms > 0.018) {
+          heardSpeech = true;
+          lastSpeechAt = now;
+          setStatus('I’m listening…', true);
+        }
+
+        if (heardSpeech && now - lastSpeechAt > 1400) {
+          cancelAnimationFrame(monitorFrame);
+          recorder.stop();
+          return;
+        }
+
+        // Recycle an empty recording so an unattended session does not grow forever.
+        if (!heardSpeech && now - turnStartedAt > 30000) {
+          cancelAnimationFrame(monitorFrame);
+          recorder.stop();
+          return;
+        }
+        monitorFrame = requestAnimationFrame(monitorSilence);
+      }
+
+      async function processTurn() {
+        if (!active) return;
+        if (!heardSpeech) {
+          startListeningTurn();
+          return;
+        }
+
+        try {
+          setStatus('Let me make sure I heard you correctly…');
+          const form = new FormData();
+          const mimeType = recorder.mimeType || 'audio/webm';
+          form.append('audio', new Blob(chunks, { type: mimeType }), 'conversation-audio');
+          const transcription = await requestJson('/api/transcribe', { method: 'POST', body: form });
+
+          if (!transcription.transcript) {
+            setStatus('I didn’t quite catch that. Please try again.');
+            return resumeSoon();
+          }
+
+          transcriptElement.textContent = transcription.transcript;
+          replyElement.textContent = 'Thinking…';
+          messages.classList.remove('hidden');
+          setStatus('Thinking of a gentle reply…');
+
+          const companion = await requestJson('/api/companion', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: transcription.transcript })
+          });
+          replyElement.textContent = companion.reply;
+          setStatus('Here’s what I’m thinking…');
+
+          const speechResponse = await fetch('/api/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: companion.reply })
+          });
+          if (!speechResponse.ok) {
+            setStatus('Speaking with the device voice…');
+            await speakWithDeviceVoice(companion.reply);
+            if (active) startListeningTurn();
+            return;
+          }
+
+          if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
+          currentAudioUrl = URL.createObjectURL(await speechResponse.blob());
+          audio.src = currentAudioUrl;
+          await audio.play();
+          await new Promise(resolve => {
+            audio.addEventListener('ended', resolve, { once: true });
+            audio.addEventListener('error', resolve, { once: true });
+          });
+          if (active) startListeningTurn();
+        } catch (error) {
+          setStatus(error.message || 'Something went wrong. I’ll listen again in a moment.');
+          resumeSoon();
+        }
+      }
+
+      async function requestJson(url, options) {
+        const response = await fetch(url, options);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'The request could not be completed.');
+        return data;
+      }
+
+      function speakWithDeviceVoice(text) {
+        return new Promise(resolve => {
+          if (!('speechSynthesis' in window)) {
+            resolve();
+            return;
+          }
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(text);
+          const voices = window.speechSynthesis.getVoices();
+          utterance.voice = voices.find(voice =>
+            /^en/i.test(voice.lang) && /samantha|karen|moira|victoria|zira/i.test(voice.name)
+          ) || voices.find(voice => /^en/i.test(voice.lang)) || null;
+          utterance.lang = 'en-US';
+          utterance.rate = 0.88;
+          utterance.pitch = 1.02;
+          utterance.volume = 1;
+          utterance.addEventListener('end', resolve, { once: true });
+          utterance.addEventListener('error', resolve, { once: true });
+          window.speechSynthesis.speak(utterance);
+        });
+      }
+
+      function resumeSoon() {
+        if (active) setTimeout(startListeningTurn, 1200);
+      }
+
+      function setStatus(message, listening = false) {
+        status.textContent = message;
+        status.classList.toggle('pulse', listening);
+      }
+    </script>
+  </body>
+</html>
