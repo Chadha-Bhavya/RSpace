@@ -58,11 +58,12 @@
       let lastSpeechAt = 0;
       let lastMonitorAt = 0;
       let turnStartedAt = 0;
-      let noiseFloor = 0.02;
+      let noiseFloor = null;
+      let speechPeak = 0;
       let currentAudioUrl;
 
-      const NOISE_CALIBRATION_MS = 450;
-      const REQUIRED_SPEECH_MS = 220;
+      const NOISE_CALIBRATION_MS = 300;
+      const REQUIRED_SPEECH_MS = 160;
       const END_SILENCE_MS = 1800;
       const EMPTY_TURN_MS = 15000;
       const MAX_TURN_MS = 30000;
@@ -109,7 +110,8 @@
         lastSpeechAt = 0;
         lastMonitorAt = performance.now();
         turnStartedAt = performance.now();
-        noiseFloor = 0.02;
+        noiseFloor = null;
+        speechPeak = 0;
         recorder = new MediaRecorder(stream);
         recorder.addEventListener('dataavailable', event => {
           if (event.data.size) chunks.push(event.data);
@@ -130,27 +132,34 @@
         lastMonitorAt = now;
         const turnAge = now - turnStartedAt;
 
-        // Sample the quietest startup audio so steady room noise does not count
-        // as speech. A hard limit below guarantees that recording always ends.
+        // Learn the room level briefly. Start and continuation use different
+        // thresholds so soft speech starts reliably but steady noise does not
+        // keep extending the recording after the speaker stops.
         if (turnAge < NOISE_CALIBRATION_MS) {
-          noiseFloor = Math.min(noiseFloor, rms);
+          noiseFloor = noiseFloor === null ? rms : noiseFloor * 0.8 + rms * 0.2;
           monitorFrame = requestAnimationFrame(monitorSilence);
           return;
         }
 
-        const speechThreshold = Math.max(0.01, noiseFloor * 2.5);
-        const soundsLikeSpeech = rms > speechThreshold;
+        const startThreshold = Math.min(Math.max(0.007, noiseFloor * 1.7), 0.018);
+        if (!heardSpeech) {
+          if (rms > startThreshold) {
+            speechDuration += elapsed;
+          } else {
+            speechDuration = 0;
+            noiseFloor = noiseFloor * 0.94 + rms * 0.06;
+          }
 
-        if (soundsLikeSpeech) {
-          speechDuration += elapsed;
-          if (heardSpeech || speechDuration >= REQUIRED_SPEECH_MS) {
+          if (speechDuration >= REQUIRED_SPEECH_MS) {
             heardSpeech = true;
             lastSpeechAt = now;
+            speechPeak = rms;
             setStatus('I’m listening…', true);
           }
-        } else if (!heardSpeech) {
-          speechDuration = 0;
-          noiseFloor = noiseFloor * 0.92 + rms * 0.08;
+        } else {
+          speechPeak = Math.max(rms, speechPeak * 0.995);
+          const continuationThreshold = Math.max(0.006, noiseFloor * 1.4, speechPeak * 0.22);
+          if (rms > continuationThreshold) lastSpeechAt = now;
         }
 
         if (heardSpeech && now - lastSpeechAt > END_SILENCE_MS) {
