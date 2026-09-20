@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .embeddings import Embedder, create_embedder
-from .extractor import extract_memories
+from .extractor import MemoryExtractor, create_extractor
 from .filters import filter_text
 from .models import MemoryDraft, MemoryEvent
 from .profile import build_profile, build_wellness_report
@@ -22,17 +22,19 @@ class MemoryEngine:
         data_root: Path,
         embedder: Embedder | None = None,
         store: MemoryStore | None = None,
+        extractor: MemoryExtractor | None = None,
     ) -> None:
         database_url = os.getenv("DATABASE_URL", "").strip()
         self.store: MemoryStore = store or (
             PostgresMemoryStore(database_url) if database_url else JsonlMemoryStore(data_root)
         )
         self.embedder = embedder or create_embedder()
+        self.extractor = extractor or create_extractor()
 
     def process(self, user_id: str, transcript: str) -> dict[str, Any]:
         user_id = self.store.safe_user_id(user_id)
         filtered = filter_text(transcript)
-        drafts = validate_drafts(filtered.redacted_text, extract_memories(filtered.redacted_text))
+        drafts = validate_drafts(filtered.redacted_text, self.extractor.extract(filtered.redacted_text))
         existing = self.store.load_events(user_id)
         now = datetime.now(timezone.utc)
         events: list[MemoryEvent] = []
@@ -71,6 +73,7 @@ class MemoryEngine:
             "redactions": filtered.redactions,
             "safety_flags": filtered.safety_flags,
             "embedding_backend": self.embedder.name,
+            "extraction_backend": self.extractor.name,
         }
 
     def profile(self, user_id: str) -> dict[str, Any]:

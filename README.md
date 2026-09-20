@@ -6,12 +6,13 @@ This FastAPI starter records a browser microphone clip, sends it to Deepgram for
 speech-to-text, gets a caring reply from the isolated AI-companion layer, and
 reads that reply through ElevenLabs.
 
-Each successful transcript also passes through a fully local, explainable
+Each successful transcript also passes through a privacy-filtered, evidence-grounded
 memory pipeline. It redacts common PII, flags explicit safety language,
-extracts supported facts with deterministic rules, validates negation and
+extracts supported facts with OpenAI structured parsing, validates negation and
 confidence, removes recent duplicates, and stores approved events in PostgreSQL
 when `DATABASE_URL` is configured, or local JSONL during development.
-The original unredacted transcript is not written to the memory files.
+The original unredacted transcript is not written to the memory files. The
+redacted transcript is sent to the configured OpenAI memory model with `store: false`.
 
 1. Create a virtual environment and install dependencies: `pip install -r requirements.txt`
 2. Copy `.env.example` to `.env`, then add your Deepgram and ElevenLabs API keys.
