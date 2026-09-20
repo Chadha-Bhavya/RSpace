@@ -129,6 +129,7 @@ export default function Home() {
             <button
               className="mt-1 min-h-14 cursor-pointer border-[3px] border-[var(--ink)] bg-[var(--lemon)] px-8 py-3 font-bold text-[var(--ink)] transition-[transform,filter] duration-150 active:translate-y-0 focus-visible:outline-4 focus-visible:outline-offset-3 focus-visible:outline-[var(--lemon)] shadow-md"
               type="submit"
+              onClick={() => window.location.href = "./home"}
               style={{ clipPath: "url(#squiggly-button)" }}
             >
               {!register ? "Log in" : "Register"}

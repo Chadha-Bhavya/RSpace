@@ -62,7 +62,7 @@ const navigationItems = [
 
 export default function SiteHeader() {
   return (
-    <header className="sticky top-0 z-50 w-full pb-0 sm:pb-12">
+    <header className="sticky top-0 z-50 w-full">
       <SquigglyBorders />
       <img
         src="/stars.svg"

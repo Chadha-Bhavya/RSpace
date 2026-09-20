@@ -75,7 +75,7 @@ export default function Home() {
 
           <div className="animate-fade-in-delay1s flex flex-col gap-4">
             <h2 className="text-4xl font-bold">Quick Actions</h2>
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-2 gap-6 place-items-center">
               <Link href="/talk-to-spi">
                 <div 
                   className="bg-gray-200 px-8 py-6 shadow-md hover:bg-gray-300 transition-colors cursor-pointer"
