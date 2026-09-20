@@ -58,7 +58,14 @@
       let lastSpeechAt = 0;
       let lastMonitorAt = 0;
       let turnStartedAt = 0;
+      let noiseFloor = 0.02;
       let currentAudioUrl;
+
+      const NOISE_CALIBRATION_MS = 450;
+      const REQUIRED_SPEECH_MS = 220;
+      const END_SILENCE_MS = 1800;
+      const EMPTY_TURN_MS = 15000;
+      const MAX_TURN_MS = 30000;
 
       button.addEventListener('click', () => active ? stopConversation() : startConversation());
 
@@ -102,6 +109,7 @@
         lastSpeechAt = 0;
         lastMonitorAt = performance.now();
         turnStartedAt = performance.now();
+        noiseFloor = 0.02;
         recorder = new MediaRecorder(stream);
         recorder.addEventListener('dataavailable', event => {
           if (event.data.size) chunks.push(event.data);
@@ -120,24 +128,38 @@
         const now = performance.now();
         const elapsed = Math.min(now - lastMonitorAt, 100);
         lastMonitorAt = now;
+        const turnAge = now - turnStartedAt;
 
-        if (rms > 0.012) {
-          speechDuration += elapsed;
-          lastSpeechAt = now;
-          if (speechDuration >= 180) heardSpeech = true;
-          setStatus('I’m listening…', true);
-        } else if (!heardSpeech) {
-          speechDuration = 0;
+        // Sample the quietest startup audio so steady room noise does not count
+        // as speech. A hard limit below guarantees that recording always ends.
+        if (turnAge < NOISE_CALIBRATION_MS) {
+          noiseFloor = Math.min(noiseFloor, rms);
+          monitorFrame = requestAnimationFrame(monitorSilence);
+          return;
         }
 
-        if (heardSpeech && now - lastSpeechAt > 1400) {
+        const speechThreshold = Math.max(0.01, noiseFloor * 2.5);
+        const soundsLikeSpeech = rms > speechThreshold;
+
+        if (soundsLikeSpeech) {
+          speechDuration += elapsed;
+          if (heardSpeech || speechDuration >= REQUIRED_SPEECH_MS) {
+            heardSpeech = true;
+            lastSpeechAt = now;
+            setStatus('I’m listening…', true);
+          }
+        } else if (!heardSpeech) {
+          speechDuration = 0;
+          noiseFloor = noiseFloor * 0.92 + rms * 0.08;
+        }
+
+        if (heardSpeech && now - lastSpeechAt > END_SILENCE_MS) {
           cancelAnimationFrame(monitorFrame);
           recorder.stop();
           return;
         }
 
-        // Recycle an empty recording so an unattended session does not grow forever.
-        if (!heardSpeech && now - turnStartedAt > 30000) {
+        if (turnAge > MAX_TURN_MS || (!heardSpeech && turnAge > EMPTY_TURN_MS)) {
           cancelAnimationFrame(monitorFrame);
           recorder.stop();
           return;
