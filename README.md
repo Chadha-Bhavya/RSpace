@@ -15,7 +15,7 @@ The original unredacted transcript is not written to the memory files. The
 redacted transcript is sent to the configured OpenAI memory model with `store: false`.
 
 1. Create a virtual environment and install dependencies: `pip install -r requirements.txt`
-2. Copy `.env.example` to `.env`, then add your Deepgram and ElevenLabs API keys.
+2. Copy `.env.example` to `.env`, then add your API and Supabase settings.
 3. Run `uvicorn main:app --reload`
 4. Open http://127.0.0.1:8000 and allow microphone access.
 
@@ -23,7 +23,7 @@ The API keys stay on the server. `POST /api/transcribe` accepts a multipart
 `audio` file and returns `{"transcript": "..."}`. `POST /api/speak` accepts
 `{"text": "..."}` and returns MP3 audio.
 
-`POST /api/companion` accepts `{"user_id": "demo_user", "text": "..."}` and
+`POST /api/companion` accepts `{"text": "..."}` and
 returns `{"reply": "..."}`. Before generating the reply, it loads a compact
 profile and up to five relevant memories. The response rules use respectful
 adult language, avoid elderspeak, follow the user's topic, and ask at most one
@@ -49,14 +49,30 @@ export RSPACE_EMBEDDING_BACKEND=sentence-transformers
 ```
 
 The transformer model downloads once; conversation text is embedded locally.
-Available endpoints:
-
-- `POST /api/memory/process` with `{"user_id":"demo_user","text":"I enjoy gardening"}`
-- `GET /api/memory/{user_id}/profile`
-- `GET /api/memory/{user_id}/search?q=plants&limit=5`
-- `GET /api/memory/{user_id}/report`
 
 Reports contain observational social-wellness signals and supporting data only.
 They explicitly do not diagnose or rule out any medical or mental-health condition.
+
+## Authentication
+
+RSpace uses Supabase email and password authentication. Passwords are handled
+and hashed by Supabase and are never stored in the RSpace tables. FastAPI keeps
+the access and refresh tokens in HTTP-only cookies. Every voice and memory route
+uses the authenticated Supabase user ID, so separate accounts receive separate
+memory profiles.
+
+Add `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` to local and Vercel environment
+variables. If Supabase email confirmation is enabled, new users must confirm by
+email before logging in. For a quick hackathon demo, it can be disabled under
+Supabase Authentication settings.
+
+The app creates `account_profiles`, `memory_events`, and `user_profiles` and
+enables Row Level Security on all three. The browser cannot choose another
+user's ID. Private memory routes are now:
+
+- `POST /api/memory/process` with `{"text":"I enjoy gardening"}`
+- `GET /api/memory/profile`
+- `GET /api/memory/search?q=plants&limit=5`
+- `GET /api/memory/report`
 
 Run local tests with `python3 -m unittest discover -s tests -v`.

@@ -11,6 +11,16 @@
       main { margin: 0 auto; max-width: 720px; min-height: 100vh; padding: 3rem 1.25rem; text-align: center; }
       h1 { font-size: clamp(2.2rem, 7vw, 3.5rem); margin: 0 0 .5rem; }
       .intro { color: #526159; margin: 0 auto 2rem; max-width: 540px; }
+      .auth-card { background: white; border-radius: 22px; box-shadow: 0 6px 24px #2f46381c; margin: 1.5rem auto; max-width: 480px; padding: 1.5rem; text-align: left; }
+      .auth-tabs { display: grid; gap: .5rem; grid-template-columns: 1fr 1fr; margin-bottom: 1.25rem; }
+      .auth-tab, .secondary-button { background: #e7ebe8; border: 0; border-radius: 12px; color: #25322c; cursor: pointer; font: inherit; font-weight: 700; min-height: 48px; padding: .5rem 1rem; }
+      .auth-tab.active { background: #176b57; color: white; }
+      .auth-card label { display: block; font-weight: 700; margin: .9rem 0 .3rem; }
+      .auth-card input { border: 2px solid #aeb8b2; border-radius: 12px; font: inherit; padding: .7rem .8rem; width: 100%; }
+      .auth-submit { background: #176b57; border: 0; border-radius: 999px; color: white; cursor: pointer; font: inherit; font-weight: 700; margin-top: 1.25rem; min-height: 56px; width: 100%; }
+      #auth-message { color: #7a3030; font-weight: 650; min-height: 1.5rem; text-align: center; }
+      .user-bar { align-items: center; display: flex; font-size: .85rem; justify-content: space-between; margin: 0 auto 1.5rem; max-width: 620px; }
+      .user-bar strong { color: #176b57; }
       #conversation { background: #176b57; border: 0; border-radius: 999px; box-shadow: 0 7px 18px #176b5730; color: white; cursor: pointer; font: inherit; font-size: 1.15rem; font-weight: 700; min-height: 72px; min-width: 230px; padding: 0 2rem; }
       #conversation.stop { background: #8b3f3f; }
       #status { font-weight: 650; min-height: 3rem; margin: 1.5rem 0; }
@@ -33,7 +43,34 @@
     </style>
   </head>
   <body>
-    <main>
+    <main id="auth-view">
+      <h1>RSpace</h1>
+      <p class="intro">Your private place to talk and be heard.</p>
+      <section class="auth-card">
+        <div class="auth-tabs">
+          <button id="login-tab" class="auth-tab active" type="button">Log in</button>
+          <button id="signup-tab" class="auth-tab" type="button">Sign up</button>
+        </div>
+        <form id="auth-form">
+          <div id="name-field" class="hidden">
+            <label for="name">Name</label>
+            <input id="name" name="name" autocomplete="name" maxlength="80" />
+          </div>
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="email" required maxlength="254" />
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="128" />
+          <button id="auth-submit" class="auth-submit" type="submit">Log in</button>
+          <p id="auth-message" aria-live="polite"></p>
+        </form>
+      </section>
+    </main>
+
+    <main id="app-view" class="hidden">
+      <div class="user-bar">
+        <span>Signed in as <strong id="user-name"></strong></span>
+        <button id="logout" class="secondary-button" type="button">Log out</button>
+      </div>
       <h1>RSpace</h1>
       <p class="intro">A gentle place to talk. Start once, then speak naturally whenever you’re ready.</p>
       <button id="conversation">Start conversation</button>
@@ -63,9 +100,22 @@
       const micFill = document.querySelector('#mic-fill');
       const micThreshold = document.querySelector('#mic-threshold');
       const micState = document.querySelector('#mic-state');
-      const userId = 'demo_user';
+      const authView = document.querySelector('#auth-view');
+      const appView = document.querySelector('#app-view');
+      const authForm = document.querySelector('#auth-form');
+      const loginTab = document.querySelector('#login-tab');
+      const signupTab = document.querySelector('#signup-tab');
+      const nameField = document.querySelector('#name-field');
+      const nameInput = document.querySelector('#name');
+      const emailInput = document.querySelector('#email');
+      const passwordInput = document.querySelector('#password');
+      const authSubmit = document.querySelector('#auth-submit');
+      const authMessage = document.querySelector('#auth-message');
+      const userName = document.querySelector('#user-name');
+      const logoutButton = document.querySelector('#logout');
 
       let active = false;
+      let authMode = 'login';
       let stream;
       let recorder;
       let audioContext;
@@ -88,6 +138,11 @@
       const MAX_TURN_MS = 30000;
 
       button.addEventListener('click', () => active ? stopConversation() : startConversation());
+      loginTab.addEventListener('click', () => setAuthMode('login'));
+      signupTab.addEventListener('click', () => setAuthMode('signup'));
+      authForm.addEventListener('submit', submitAuth);
+      logoutButton.addEventListener('click', logout);
+      loadSession();
 
       async function startConversation() {
         try {
@@ -224,7 +279,6 @@
             return resumeSoon();
           }
           form.append('audio', recording, `conversation.${extension}`);
-          form.append('user_id', userId);
           const transcription = await requestJson('/api/transcribe', { method: 'POST', body: form });
 
           if (!transcription.transcript) {
@@ -240,12 +294,12 @@
           const companion = await requestJson('/api/companion', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId, text: transcription.transcript })
+            body: JSON.stringify({ text: transcription.transcript })
           });
           replyElement.textContent = companion.reply;
           setStatus('Here’s what I’m thinking…');
 
-          const speechResponse = await fetch('/api/speak', {
+          const speechResponse = await authenticatedFetch('/api/speak', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: companion.reply })
@@ -273,10 +327,93 @@
       }
 
       async function requestJson(url, options) {
-        const response = await fetch(url, options);
+        const response = await authenticatedFetch(url, options);
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || 'The request could not be completed.');
         return data;
+      }
+
+      async function authenticatedFetch(url, options = {}, retry = true) {
+        const response = await fetch(url, { ...options, credentials: 'same-origin' });
+        if (response.status !== 401 || !retry || url.startsWith('/api/auth/')) return response;
+        const refreshed = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'same-origin' });
+        if (!refreshed.ok) {
+          showAuth('Your session ended. Please log in again.');
+          return response;
+        }
+        return authenticatedFetch(url, options, false);
+      }
+
+      function setAuthMode(mode) {
+        authMode = mode;
+        const signingUp = mode === 'signup';
+        loginTab.classList.toggle('active', !signingUp);
+        signupTab.classList.toggle('active', signingUp);
+        nameField.classList.toggle('hidden', !signingUp);
+        nameInput.required = signingUp;
+        passwordInput.autocomplete = signingUp ? 'new-password' : 'current-password';
+        authSubmit.textContent = signingUp ? 'Create account' : 'Log in';
+        authMessage.textContent = '';
+      }
+
+      async function submitAuth(event) {
+        event.preventDefault();
+        authMessage.textContent = authMode === 'signup' ? 'Creating your account…' : 'Logging in…';
+        const payload = {
+          email: emailInput.value.trim(),
+          password: passwordInput.value
+        };
+        if (authMode === 'signup') payload.name = nameInput.value.trim();
+        try {
+          const data = await requestJson(`/api/auth/${authMode}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (data.status === 'confirmation_required') {
+            setAuthMode('login');
+            authMessage.textContent = data.message;
+            return;
+          }
+          showApp(data.user);
+          authForm.reset();
+        } catch (error) {
+          authMessage.textContent = error.message || 'Authentication failed. Please try again.';
+        }
+      }
+
+      async function loadSession() {
+        let response = await fetch('/api/auth/me', { credentials: 'same-origin' });
+        if (response.status === 401) {
+          const refreshed = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'same-origin' });
+          if (refreshed.ok) response = await fetch('/api/auth/me', { credentials: 'same-origin' });
+        }
+        if (!response.ok) {
+          showAuth();
+          return;
+        }
+        const data = await response.json();
+        showApp(data.user);
+      }
+
+      async function logout() {
+        if (active) stopConversation();
+        await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+        showAuth('You have been logged out.');
+      }
+
+      function showApp(user) {
+        userName.textContent = user?.name || user?.email || 'User';
+        authMessage.textContent = '';
+        authView.classList.add('hidden');
+        appView.classList.remove('hidden');
+      }
+
+      function showAuth(message = '') {
+        if (active) stopConversation();
+        appView.classList.add('hidden');
+        authView.classList.remove('hidden');
+        authMessage.textContent = message;
       }
 
       function speakWithDeviceVoice(text) {

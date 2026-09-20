@@ -23,6 +23,10 @@ class MemoryStore(Protocol):
 
     def load_profile(self, user_id: str) -> dict[str, Any]: ...
 
+    def save_account_profile(self, user_id: str, email: str, display_name: str) -> None: ...
+
+    def load_account_profile(self, user_id: str) -> dict[str, Any]: ...
+
 
 def safe_user_id(user_id: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", user_id.strip())[:80]
@@ -84,6 +88,29 @@ class JsonlMemoryStore:
 
     def load_profile(self, user_id: str) -> dict[str, Any]:
         path = self._user_dir(user_id) / "profile.json"
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def save_account_profile(self, user_id: str, email: str, display_name: str) -> None:
+        directory = self._user_dir(user_id)
+        destination = directory / "account.json"
+        payload = {"user_id": user_id, "email": email, "display_name": display_name}
+        with self._lock:
+            descriptor, temporary_name = tempfile.mkstemp(prefix="account-", suffix=".json", dir=directory)
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle, ensure_ascii=False, indent=2)
+                os.replace(temporary_name, destination)
+            finally:
+                if os.path.exists(temporary_name):
+                    os.unlink(temporary_name)
+
+    def load_account_profile(self, user_id: str) -> dict[str, Any]:
+        path = self._user_dir(user_id) / "account.json"
         if not path.exists():
             return {}
         try:
@@ -164,6 +191,20 @@ class PostgresMemoryStore:
                     )
                     """
                 )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS account_profiles (
+                        user_id text PRIMARY KEY,
+                        email text NOT NULL,
+                        display_name text NOT NULL,
+                        created_at timestamptz NOT NULL DEFAULT now(),
+                        updated_at timestamptz NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+                cursor.execute("ALTER TABLE memory_events ENABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE account_profiles ENABLE ROW LEVEL SECURITY")
             self._initialized = True
 
     def load_events(self, user_id: str) -> list[MemoryEvent]:
@@ -251,3 +292,39 @@ class PostgresMemoryStore:
             cursor.execute("SELECT profile FROM user_profiles WHERE user_id = %s", (user_id,))
             row = cursor.fetchone()
         return dict(row[0]) if row else {}
+
+    def save_account_profile(self, user_id: str, email: str, display_name: str) -> None:
+        self._ensure_schema()
+        user_id = self.safe_user_id(user_id)
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO account_profiles (user_id, email, display_name, updated_at)
+                VALUES (%s, %s, %s, now())
+                ON CONFLICT (user_id) DO UPDATE
+                SET email = EXCLUDED.email,
+                    display_name = EXCLUDED.display_name,
+                    updated_at = now()
+                """,
+                (user_id, email.strip().lower(), display_name.strip()),
+            )
+
+    def load_account_profile(self, user_id: str) -> dict[str, Any]:
+        self._ensure_schema()
+        user_id = self.safe_user_id(user_id)
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT user_id, email, display_name, created_at, updated_at "
+                "FROM account_profiles WHERE user_id = %s",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return {}
+        return {
+            "user_id": row[0],
+            "email": row[1],
+            "display_name": row[2],
+            "created_at": row[3].isoformat(),
+            "updated_at": row[4].isoformat(),
+        }

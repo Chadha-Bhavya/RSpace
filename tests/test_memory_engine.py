@@ -116,6 +116,17 @@ class TestMemoryPipeline(unittest.TestCase):
         self.assertEqual(report["data_quality"], "insufficient_data")
         self.assertIn("does not diagnose", report["disclaimer"])
 
+    def test_account_profiles_are_separate(self):
+        self.engine.store.save_account_profile("user-a", "a@example.com", "Alex")
+        self.engine.store.save_account_profile("user-b", "b@example.com", "Bailey")
+
+        first = self.engine.store.load_account_profile("user-a")
+        second = self.engine.store.load_account_profile("user-b")
+
+        self.assertEqual(first["display_name"], "Alex")
+        self.assertEqual(second["display_name"], "Bailey")
+        self.assertNotEqual(first["email"], second["email"])
+
 
 if __name__ == "__main__":
     unittest.main()

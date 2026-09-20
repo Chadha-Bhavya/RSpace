@@ -1,8 +1,4 @@
-"""A small FastAPI voice layer for RSpace.
-
-The browser records a short audio clip, Deepgram turns it into text, and
-ElevenLabs turns a supplied reply into friendly spoken audio.
-"""
+"""FastAPI voice companion with Supabase authentication and private memory."""
 
 import asyncio
 import os
@@ -11,11 +7,12 @@ from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
+from auth import AuthError, create_auth_client
 from companion import create_reply_provider, retrieve_companion_context
 from memory_engine import MemoryEngine
 from memory_engine.filters import filter_text
@@ -26,6 +23,8 @@ DEEPGRAM_LISTEN_URL = "https://api.deepgram.com/v1/listen"
 ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 STATIC_DIR = Path(__file__).parent / "static"
 DATA_DIR = Path(os.getenv("RSPACE_DATA_DIR", Path(__file__).parent / "data"))
+ACCESS_COOKIE = "rspace_access_token"
+REFRESH_COOKIE = "rspace_refresh_token"
 
 
 @asynccontextmanager
@@ -36,7 +35,7 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title="RSpace Voice API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="RSpace Voice API", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -51,13 +50,22 @@ class SpeakRequest(BaseModel):
 
 
 class CompanionRequest(BaseModel):
-    user_id: str = Field(default="demo_user", min_length=1, max_length=80)
     text: str = Field(min_length=1, max_length=2_000, examples=["I have been feeling lonely lately."])
 
 
 class MemoryRequest(BaseModel):
-    user_id: str = Field(default="demo_user", min_length=1, max_length=80)
     text: str = Field(min_length=1, max_length=10_000)
+
+
+class SignUpRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    email: str = Field(min_length=5, max_length=254, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    password: str = Field(min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=254, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    password: str = Field(min_length=8, max_length=128)
 
 
 def require_setting(name: str) -> str:
@@ -68,8 +76,64 @@ def require_setting(name: str) -> str:
 
 
 def upstream_error(service: str, response: httpx.Response) -> HTTPException:
-    # Do not pass upstream bodies through: they can contain account details.
     return HTTPException(status_code=502, detail=f"{service} could not complete the request (status {response.status_code}).")
+
+
+def request_is_secure(request: Request) -> bool:
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    return forwarded == "https" or request.url.scheme == "https"
+
+
+def set_session_cookies(response: Response, session: dict, secure: bool) -> None:
+    if session.get("access_token"):
+        response.set_cookie(
+            ACCESS_COOKIE,
+            session["access_token"],
+            max_age=int(session.get("expires_in", 3600)),
+            httponly=True,
+            secure=secure,
+            samesite="lax",
+            path="/",
+        )
+    if session.get("refresh_token"):
+        response.set_cookie(
+            REFRESH_COOKIE,
+            session["refresh_token"],
+            max_age=60 * 60 * 24 * 30,
+            httponly=True,
+            secure=secure,
+            samesite="lax",
+            path="/",
+        )
+
+
+def clear_session_cookies(response: Response) -> None:
+    response.delete_cookie(ACCESS_COOKIE, path="/")
+    response.delete_cookie(REFRESH_COOKIE, path="/")
+
+
+def public_user(user: dict, account: dict | None = None) -> dict[str, str]:
+    metadata = user.get("user_metadata") or {}
+    account = account or {}
+    return {
+        "id": str(user.get("id", "")),
+        "email": str(user.get("email") or account.get("email", "")),
+        "name": str(account.get("display_name") or metadata.get("display_name") or "User"),
+    }
+
+
+async def require_user(request: Request) -> dict:
+    access_token = request.cookies.get(ACCESS_COOKIE)
+    if not access_token:
+        raise HTTPException(status_code=401, detail="Please log in to continue.")
+    try:
+        return await create_auth_client(request.app.state.http).get_user(access_token)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except AuthError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except httpx.RequestError as error:
+        raise HTTPException(status_code=502, detail="Authentication is temporarily unavailable.") from error
 
 
 @app.get("/health")
@@ -77,12 +141,116 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/api/auth/signup")
+async def sign_up(credentials: SignUpRequest, request: Request) -> Response:
+    display_name = " ".join(credentials.name.strip().split())
+    if len(display_name) < 2:
+        raise HTTPException(status_code=422, detail="Please enter your name.")
+    try:
+        session = await create_auth_client(request.app.state.http).sign_up(
+            credentials.email.strip().lower(),
+            credentials.password,
+            display_name,
+        )
+        user = session.get("user") or {}
+        if user.get("id"):
+            await asyncio.to_thread(
+                request.app.state.memory.store.save_account_profile,
+                str(user["id"]),
+                str(user.get("email") or credentials.email),
+                display_name,
+            )
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except AuthError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except httpx.RequestError as error:
+        raise HTTPException(status_code=502, detail="Account creation is temporarily unavailable.") from error
+
+    if not session.get("access_token"):
+        return JSONResponse({
+            "status": "confirmation_required",
+            "message": "Check your email to confirm the account, then log in.",
+        })
+
+    account = {"display_name": display_name, "email": credentials.email}
+    response = JSONResponse({"status": "authenticated", "user": public_user(user, account)})
+    set_session_cookies(response, session, request_is_secure(request))
+    return response
+
+
+@app.post("/api/auth/login")
+async def log_in(credentials: LoginRequest, request: Request) -> Response:
+    try:
+        session = await create_auth_client(request.app.state.http).sign_in(
+            credentials.email.strip().lower(),
+            credentials.password,
+        )
+        user = session.get("user") or {}
+        account = await asyncio.to_thread(request.app.state.memory.store.load_account_profile, str(user["id"]))
+        if not account:
+            display_name = str((user.get("user_metadata") or {}).get("display_name") or "User")
+            await asyncio.to_thread(
+                request.app.state.memory.store.save_account_profile,
+                str(user["id"]),
+                str(user.get("email") or credentials.email),
+                display_name,
+            )
+            account = {"display_name": display_name, "email": credentials.email}
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except AuthError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except httpx.RequestError as error:
+        raise HTTPException(status_code=502, detail="Login is temporarily unavailable.") from error
+
+    response = JSONResponse({"status": "authenticated", "user": public_user(user, account)})
+    set_session_cookies(response, session, request_is_secure(request))
+    return response
+
+
+@app.post("/api/auth/refresh")
+async def refresh_session(request: Request) -> Response:
+    refresh_token = request.cookies.get(REFRESH_COOKIE)
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Please log in to continue.")
+    try:
+        session = await create_auth_client(request.app.state.http).refresh(refresh_token)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except AuthError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except httpx.RequestError as error:
+        raise HTTPException(status_code=502, detail="Session refresh is temporarily unavailable.") from error
+    response = JSONResponse({"status": "refreshed"})
+    set_session_cookies(response, session, request_is_secure(request))
+    return response
+
+
+@app.get("/api/auth/me")
+async def current_account(request: Request, user: dict = Depends(require_user)) -> dict[str, object]:
+    account = await asyncio.to_thread(request.app.state.memory.store.load_account_profile, str(user["id"]))
+    return {"user": public_user(user, account)}
+
+
+@app.post("/api/auth/logout")
+async def log_out(request: Request) -> Response:
+    access_token = request.cookies.get(ACCESS_COOKIE)
+    if access_token:
+        try:
+            await create_auth_client(request.app.state.http).sign_out(access_token)
+        except (AuthError, RuntimeError, httpx.RequestError):
+            pass
+    response = JSONResponse({"status": "logged_out"})
+    clear_session_cookies(response)
+    return response
+
+
 @app.post("/api/transcribe")
 async def transcribe(
     audio: UploadFile = File(...),
-    user_id: str = Form(default="demo_user"),
+    user: dict = Depends(require_user),
 ) -> dict[str, object]:
-    """Transcribe audio, then process the text through the local memory engine."""
     api_key = require_setting("DEEPGRAM_API_KEY")
     audio_bytes = await audio.read()
     if not audio_bytes:
@@ -99,10 +267,7 @@ async def transcribe(
     response = await app.state.http.post(
         DEEPGRAM_LISTEN_URL,
         params={"model": "nova-3", "smart_format": "true", "punctuate": "true"},
-        headers={
-            "Authorization": f"Token {api_key}",
-            "Content-Type": audio_type,
-        },
+        headers={"Authorization": f"Token {api_key}", "Content-Type": audio_type},
         content=audio_bytes,
     )
     if response.is_error:
@@ -115,13 +280,12 @@ async def transcribe(
 
     data = response.json()
     transcript = data.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0].get("transcript", "").strip()
-    memory = await asyncio.to_thread(app.state.memory.process, user_id, transcript) if transcript else None
+    memory = await asyncio.to_thread(app.state.memory.process, str(user["id"]), transcript) if transcript else None
     return {"transcript": transcript, "memory": memory}
 
 
 @app.post("/api/speak")
-async def speak(request: SpeakRequest) -> Response:
-    """Turn a concise, reassuring reply into MP3 audio with ElevenLabs."""
+async def speak(request: SpeakRequest, user: dict = Depends(require_user)) -> Response:
     api_key = require_setting("ELEVENLABS_API_KEY")
     voice_id = require_setting("ELEVENLABS_VOICE_ID")
     response = await app.state.http.post(
@@ -145,15 +309,14 @@ async def speak(request: SpeakRequest) -> Response:
 
 
 @app.post("/api/companion")
-async def companion(request: CompanionRequest) -> dict[str, str]:
-    """Generate a respectful, memory-informed reply separate from speech I/O."""
+async def companion(request: CompanionRequest, user: dict = Depends(require_user)) -> dict[str, str]:
     try:
         user_text = request.text.strip()
         filtered = filter_text(user_text)
         context = await asyncio.to_thread(
             retrieve_companion_context,
             app.state.memory,
-            request.user_id,
+            str(user["id"]),
             user_text,
             filtered.safety_flags,
         )
@@ -168,38 +331,37 @@ async def companion(request: CompanionRequest) -> dict[str, str]:
 
 
 @app.post("/api/memory/process")
-async def process_memory(request: MemoryRequest) -> dict[str, object]:
-    """Process text directly; useful for testing and non-voice clients."""
+async def process_memory(request: MemoryRequest, user: dict = Depends(require_user)) -> dict[str, object]:
     try:
-        return await asyncio.to_thread(app.state.memory.process, request.user_id, request.text)
+        return await asyncio.to_thread(app.state.memory.process, str(user["id"]), request.text)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@app.get("/api/memory/{user_id}/profile")
-async def memory_profile(user_id: str) -> dict[str, object]:
+@app.get("/api/memory/profile")
+async def memory_profile(user: dict = Depends(require_user)) -> dict[str, object]:
     try:
-        return await asyncio.to_thread(app.state.memory.profile, user_id)
+        return await asyncio.to_thread(app.state.memory.profile, str(user["id"]))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@app.get("/api/memory/{user_id}/search")
+@app.get("/api/memory/search")
 async def search_memory(
-    user_id: str,
     q: str = Query(min_length=1, max_length=500),
     limit: int = Query(default=5, ge=1, le=20),
+    user: dict = Depends(require_user),
 ) -> list[dict]:
     try:
-        return await asyncio.to_thread(app.state.memory.search, user_id, q, limit)
+        return await asyncio.to_thread(app.state.memory.search, str(user["id"]), q, limit)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@app.get("/api/memory/{user_id}/report")
-async def memory_report(user_id: str) -> dict[str, object]:
+@app.get("/api/memory/report")
+async def memory_report(user: dict = Depends(require_user)) -> dict[str, object]:
     try:
-        return await asyncio.to_thread(app.state.memory.report, user_id)
+        return await asyncio.to_thread(app.state.memory.report, str(user["id"]))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
