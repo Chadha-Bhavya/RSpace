@@ -92,6 +92,22 @@ class MemoryEngine:
     def report(self, user_id: str) -> dict[str, Any]:
         return build_wellness_report(self.profile(user_id))
 
+    def start_conversation(self, user_id: str, timezone_name: str = "UTC") -> dict[str, Any]:
+        user_id = self.store.safe_user_id(user_id)
+        return self.store.start_conversation(user_id, timezone_name)
+
+    def conversation_context(self, user_id: str, session_id: str) -> dict[str, Any]:
+        user_id = self.store.safe_user_id(user_id)
+        return self.store.conversation_context(user_id, session_id)
+
+    def touch_conversation(self, user_id: str, session_id: str) -> None:
+        user_id = self.store.safe_user_id(user_id)
+        self.store.touch_conversation(user_id, session_id)
+
+    def end_conversation(self, user_id: str, session_id: str) -> None:
+        user_id = self.store.safe_user_id(user_id)
+        self.store.end_conversation(user_id, session_id)
+
     @staticmethod
     def _is_recent_duplicate(
         draft: MemoryDraft,

@@ -14,6 +14,8 @@ def build_profile(user_id: str, events: list[MemoryEvent], embedding_backend: st
     communication: Counter[str] = Counter()
     social_events: list[MemoryEvent] = []
     conversation_notes: list[MemoryEvent] = []
+    important_dates: list[MemoryEvent] = []
+    plans: list[MemoryEvent] = []
     themes: Counter[str] = Counter()
 
     for event in events:
@@ -30,6 +32,10 @@ def build_profile(user_id: str, events: list[MemoryEvent], embedding_backend: st
         elif event.kind == "conversation_note":
             conversation_notes.append(event)
             themes.update(str(keyword) for keyword in event.attributes.get("keywords", []))
+        elif event.kind == "important_date":
+            important_dates.append(event)
+        elif event.kind == "plan":
+            plans.append(event)
 
     interest_summary = []
     for topic, observations in interests.items():
@@ -74,6 +80,27 @@ def build_profile(user_id: str, events: list[MemoryEvent], embedding_backend: st
                 "confidence": event.confidence,
             }
             for event in sorted(conversation_notes, key=lambda item: item.timestamp, reverse=True)[:10]
+        ],
+        "important_dates": [
+            {
+                "value": event.value,
+                "person": event.attributes.get("person"),
+                "date": event.attributes.get("date"),
+                "occasion": event.attributes.get("occasion"),
+                "observed_at": event.timestamp,
+                "confidence": event.confidence,
+            }
+            for event in sorted(important_dates, key=lambda item: item.timestamp, reverse=True)[:30]
+        ],
+        "plans": [
+            {
+                "value": event.value,
+                "date": event.attributes.get("date"),
+                "person": event.attributes.get("person"),
+                "observed_at": event.timestamp,
+                "confidence": event.confidence,
+            }
+            for event in sorted(plans, key=lambda item: item.timestamp, reverse=True)[:20]
         ],
         "social_wellness": trend,
     }

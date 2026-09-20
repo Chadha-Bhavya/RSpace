@@ -59,6 +59,8 @@ class SpeakRequest(BaseModel):
 
 class CompanionRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2_000, examples=["I have been feeling lonely lately."])
+    session_id: str | None = Field(default=None, max_length=64)
+    first_turn: bool = False
 
 
 class MemoryRequest(BaseModel):
@@ -69,6 +71,7 @@ class SignUpRequest(BaseModel):
     name: str = Field(min_length=2, max_length=80)
     email: str = Field(min_length=5, max_length=254, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
     password: str = Field(min_length=8, max_length=128)
+    memory_consent: bool
 
 
 class LoginRequest(BaseModel):
@@ -78,6 +81,10 @@ class LoginRequest(BaseModel):
 
 class MatchDecisionRequest(BaseModel):
     decision: str = Field(pattern=r"^(accept|pass|block)$")
+
+
+class ConversationStartRequest(BaseModel):
+    timezone: str = Field(default="UTC", min_length=1, max_length=80)
 
 
 def require_setting(name: str) -> str:
@@ -170,6 +177,11 @@ async def sign_up(credentials: SignUpRequest, request: Request) -> Response:
     display_name = " ".join(credentials.name.strip().split())
     if len(display_name) < 2:
         raise HTTPException(status_code=422, detail="Please enter your name.")
+    if not credentials.memory_consent:
+        raise HTTPException(
+            status_code=422,
+            detail="Please agree to automatic private memory saving to create an account.",
+        )
     try:
         session = await create_auth_client(request.app.state.http).sign_up(
             credentials.email.strip().lower(),
@@ -435,16 +447,33 @@ async def companion(request: CompanionRequest, user: dict = Depends(require_user
     try:
         user_text = request.text.strip()
         if detect_end_conversation(user_text):
+            if request.session_id:
+                await asyncio.to_thread(
+                    app.state.memory.end_conversation,
+                    str(user["id"]),
+                    request.session_id,
+                )
             return {"reply": "Of course. Goodbye for now.", "end_conversation": True}
         filtered = filter_text(user_text)
+        session_context = await load_conversation_context(str(user["id"]), request.session_id)
+        connection_names = await load_connection_names(str(user["id"]), user_text)
         context = await asyncio.to_thread(
             retrieve_companion_context,
             app.state.memory,
             str(user["id"]),
             user_text,
             filtered.safety_flags,
+            session_context,
+            request.first_turn,
+            connection_names,
         )
         reply = await create_reply_provider(app.state.http).reply(user_text, context)
+        if request.session_id:
+            await asyncio.to_thread(
+                app.state.memory.touch_conversation,
+                str(user["id"]),
+                request.session_id,
+            )
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except httpx.HTTPStatusError as error:
@@ -452,6 +481,65 @@ async def companion(request: CompanionRequest, user: dict = Depends(require_user
     except (httpx.RequestError, ValueError):
         raise HTTPException(status_code=502, detail="The companion could not prepare a reply. Please try again.")
     return {"reply": reply, "end_conversation": False}
+
+
+async def load_conversation_context(user_id: str, session_id: str | None) -> dict[str, object]:
+    if not session_id:
+        return {}
+    try:
+        return await asyncio.to_thread(app.state.memory.conversation_context, user_id, session_id)
+    except Exception:
+        return {}
+
+
+def suggests_loneliness(text: str) -> bool:
+    normalized = " ".join(text.lower().split())
+    return any(phrase in normalized for phrase in (
+        "lonely", "isolated", "no one to talk to", "nobody to talk to",
+        "wish i had someone", "miss having someone", "feel alone",
+    ))
+
+
+async def load_connection_names(user_id: str, user_text: str) -> list[str]:
+    if not suggests_loneliness(user_text):
+        return []
+    try:
+        connections = await asyncio.to_thread(app.state.matching.connections, user_id)
+    except Exception:
+        return []
+    return [str(item.get("name")) for item in connections if item.get("name")][:5]
+
+
+@app.post("/api/conversations/start")
+async def start_conversation(
+    details: ConversationStartRequest,
+    user: dict = Depends(require_user),
+) -> dict[str, object]:
+    try:
+        return await asyncio.to_thread(
+            app.state.memory.start_conversation,
+            str(user["id"]),
+            details.timezone,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/conversations/{session_id}/end")
+async def end_conversation(session_id: str, user: dict = Depends(require_user)) -> dict[str, str]:
+    await asyncio.to_thread(app.state.memory.end_conversation, str(user["id"]), session_id)
+    return {"status": "ended"}
+
+
+@app.get("/api/life-space")
+async def life_space(user: dict = Depends(require_user)) -> dict[str, object]:
+    profile = await asyncio.to_thread(app.state.memory.profile, str(user["id"]))
+    return {
+        "important_dates": profile.get("important_dates", []),
+        "relationships": profile.get("important_relationships", []),
+        "plans": profile.get("plans", []),
+        "interests": profile.get("interests", [])[:12],
+    }
 
 
 async def persist_conversation_memory(user_id: str, text: str) -> None:
@@ -473,6 +561,8 @@ async def respond_stream(websocket: WebSocket) -> None:
     try:
         request = await websocket.receive_json()
         user_text = str(request.get("text") or "").strip()
+        session_id = str(request.get("session_id") or "").strip() or None
+        first_turn = bool(request.get("first_turn"))
         if not user_text or len(user_text) > 2_000:
             await websocket.send_json({"type": "error", "message": "Please send a short message."})
             return
@@ -483,12 +573,17 @@ async def respond_stream(websocket: WebSocket) -> None:
                 yield "Of course. Goodbye for now."
         else:
             filtered = filter_text(user_text)
+            session_context = await load_conversation_context(str(user["id"]), session_id)
+            connection_names = await load_connection_names(str(user["id"]), user_text)
             context = await asyncio.to_thread(
                 retrieve_companion_context,
                 app.state.memory,
                 str(user["id"]),
                 user_text,
                 filtered.safety_flags,
+                session_context,
+                first_turn,
+                connection_names,
             )
             provider = create_reply_provider(app.state.http)
             reply_deltas = lambda: provider.stream_reply(user_text, context)
@@ -559,6 +654,11 @@ async def respond_stream(websocket: WebSocket) -> None:
             "reply": "".join(reply_parts).strip(),
             "end_conversation": ending,
         })
+        if session_id:
+            if ending:
+                await asyncio.to_thread(app.state.memory.end_conversation, str(user["id"]), session_id)
+            else:
+                await asyncio.to_thread(app.state.memory.touch_conversation, str(user["id"]), session_id)
         if memory_task:
             await memory_task
     except Exception:

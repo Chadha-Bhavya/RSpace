@@ -6,6 +6,7 @@ from .models import MemoryDraft
 ALLOWED_KINDS = {
     "interest", "relationship", "social_signal", "availability", "communication_preference",
     "conversation_note",
+    "important_date", "plan",
 }
 MIN_CONFIDENCE = 0.55
 

@@ -5,6 +5,8 @@ import os
 import re
 import tempfile
 import threading
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -28,6 +30,14 @@ class MemoryStore(Protocol):
     def load_account_profile(self, user_id: str) -> dict[str, Any]: ...
 
     def list_account_profiles(self) -> list[dict[str, Any]]: ...
+
+    def start_conversation(self, user_id: str, timezone_name: str) -> dict[str, Any]: ...
+
+    def conversation_context(self, user_id: str, session_id: str) -> dict[str, Any]: ...
+
+    def touch_conversation(self, user_id: str, session_id: str) -> None: ...
+
+    def end_conversation(self, user_id: str, session_id: str) -> None: ...
 
 
 def safe_user_id(user_id: str) -> str:
@@ -131,6 +141,83 @@ class JsonlMemoryStore:
                 accounts.append(account)
         return accounts
 
+    def _sessions_path(self, user_id: str) -> Path:
+        return self._user_dir(user_id) / "conversation_sessions.json"
+
+    def _load_sessions(self, user_id: str) -> list[dict[str, Any]]:
+        path = self._sessions_path(user_id)
+        if not path.exists():
+            return []
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return []
+        return value if isinstance(value, list) else []
+
+    def _save_sessions(self, user_id: str, sessions: list[dict[str, Any]]) -> None:
+        directory = self._user_dir(user_id)
+        destination = self._sessions_path(user_id)
+        descriptor, temporary_name = tempfile.mkstemp(prefix="sessions-", suffix=".json", dir=directory)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(sessions, handle, ensure_ascii=False, indent=2)
+            os.replace(temporary_name, destination)
+        finally:
+            if os.path.exists(temporary_name):
+                os.unlink(temporary_name)
+
+    def start_conversation(self, user_id: str, timezone_name: str) -> dict[str, Any]:
+        user_id = self.safe_user_id(user_id)
+        now = datetime.now(timezone.utc).isoformat()
+        session = {
+            "session_id": uuid.uuid4().hex,
+            "user_id": user_id,
+            "started_at": now,
+            "ended_at": None,
+            "last_turn_at": None,
+            "turn_count": 0,
+            "timezone": timezone_name,
+        }
+        with self._lock:
+            sessions = self._load_sessions(user_id)
+            sessions.append(session)
+            self._save_sessions(user_id, sessions[-100:])
+        return self.conversation_context(user_id, session["session_id"])
+
+    def conversation_context(self, user_id: str, session_id: str) -> dict[str, Any]:
+        user_id = self.safe_user_id(user_id)
+        sessions = self._load_sessions(user_id)
+        current = next((item for item in sessions if item.get("session_id") == session_id), None)
+        if not current:
+            return {}
+        earlier = [
+            item for item in sessions
+            if item.get("session_id") != session_id and item.get("started_at") < current.get("started_at", "")
+        ]
+        previous = max(earlier, key=lambda item: item.get("started_at", ""), default=None)
+        return {"current_session": current, "previous_session": previous}
+
+    def touch_conversation(self, user_id: str, session_id: str) -> None:
+        user_id = self.safe_user_id(user_id)
+        with self._lock:
+            sessions = self._load_sessions(user_id)
+            for session in sessions:
+                if session.get("session_id") == session_id:
+                    session["turn_count"] = int(session.get("turn_count") or 0) + 1
+                    session["last_turn_at"] = datetime.now(timezone.utc).isoformat()
+                    break
+            self._save_sessions(user_id, sessions)
+
+    def end_conversation(self, user_id: str, session_id: str) -> None:
+        user_id = self.safe_user_id(user_id)
+        with self._lock:
+            sessions = self._load_sessions(user_id)
+            for session in sessions:
+                if session.get("session_id") == session_id and not session.get("ended_at"):
+                    session["ended_at"] = datetime.now(timezone.utc).isoformat()
+                    break
+            self._save_sessions(user_id, sessions)
+
 
 class PostgresMemoryStore:
     """Persistent Supabase/PostgreSQL storage for serverless deployments."""
@@ -215,9 +302,27 @@ class PostgresMemoryStore:
                     )
                     """
                 )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS conversation_sessions (
+                        session_id text PRIMARY KEY,
+                        user_id text NOT NULL,
+                        started_at timestamptz NOT NULL,
+                        ended_at timestamptz,
+                        last_turn_at timestamptz,
+                        turn_count integer NOT NULL DEFAULT 0,
+                        timezone text NOT NULL DEFAULT 'UTC'
+                    )
+                    """
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS conversation_sessions_user_started_idx "
+                    "ON conversation_sessions (user_id, started_at DESC)"
+                )
                 cursor.execute("ALTER TABLE memory_events ENABLE ROW LEVEL SECURITY")
                 cursor.execute("ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY")
                 cursor.execute("ALTER TABLE account_profiles ENABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE conversation_sessions ENABLE ROW LEVEL SECURITY")
             self._initialized = True
 
     def load_events(self, user_id: str) -> list[MemoryEvent]:
@@ -360,3 +465,76 @@ class PostgresMemoryStore:
             }
             for row in rows
         ]
+
+    @staticmethod
+    def _session_row(row: Any) -> dict[str, Any] | None:
+        if not row:
+            return None
+        return {
+            "session_id": row[0],
+            "user_id": row[1],
+            "started_at": row[2].isoformat(),
+            "ended_at": row[3].isoformat() if row[3] else None,
+            "last_turn_at": row[4].isoformat() if row[4] else None,
+            "turn_count": int(row[5]),
+            "timezone": row[6],
+        }
+
+    def start_conversation(self, user_id: str, timezone_name: str) -> dict[str, Any]:
+        self._ensure_schema()
+        user_id = self.safe_user_id(user_id)
+        session_id = uuid.uuid4().hex
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO conversation_sessions "
+                "(session_id, user_id, started_at, timezone) VALUES (%s, %s, now(), %s)",
+                (session_id, user_id, timezone_name),
+            )
+        return self.conversation_context(user_id, session_id)
+
+    def conversation_context(self, user_id: str, session_id: str) -> dict[str, Any]:
+        self._ensure_schema()
+        user_id = self.safe_user_id(user_id)
+        columns = (
+            "session_id, user_id, started_at, ended_at, last_turn_at, turn_count, timezone"
+        )
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT {columns} FROM conversation_sessions "
+                "WHERE user_id = %s AND session_id = %s",
+                (user_id, session_id),
+            )
+            current_row = cursor.fetchone()
+            if not current_row:
+                return {}
+            cursor.execute(
+                f"SELECT {columns} FROM conversation_sessions "
+                "WHERE user_id = %s AND session_id <> %s AND started_at < %s "
+                "ORDER BY started_at DESC LIMIT 1",
+                (user_id, session_id, current_row[2]),
+            )
+            previous_row = cursor.fetchone()
+        return {
+            "current_session": self._session_row(current_row),
+            "previous_session": self._session_row(previous_row),
+        }
+
+    def touch_conversation(self, user_id: str, session_id: str) -> None:
+        self._ensure_schema()
+        user_id = self.safe_user_id(user_id)
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE conversation_sessions SET turn_count = turn_count + 1, last_turn_at = now() "
+                "WHERE user_id = %s AND session_id = %s",
+                (user_id, session_id),
+            )
+
+    def end_conversation(self, user_id: str, session_id: str) -> None:
+        self._ensure_schema()
+        user_id = self.safe_user_id(user_id)
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE conversation_sessions SET ended_at = COALESCE(ended_at, now()) "
+                "WHERE user_id = %s AND session_id = %s",
+                (user_id, session_id),
+            )

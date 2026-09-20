@@ -19,8 +19,12 @@ EXTRACTION_INSTRUCTIONS = """You extract useful long-term memories from a conver
 Return only facts directly supported by the supplied redacted transcript.
 Use an exact substring of the transcript as evidence for every item.
 Preserve negation and whether an interest is former, occasional, frequent, or unknown.
-Prefer durable interests, relationships, availability, communication preferences, social connection signals,
-and meaningful personal events. Ignore greetings, filler, assistant speech, and unsupported inference.
+Extract important dates such as birthdays and anniversaries when the person and date are explicit. For a
+recurring date, use MM-DD. For a one-time dated plan, use YYYY-MM-DD when the year is explicit. Keep the
+original date wording in value when a normalized date cannot be supported. Extract specific future plans
+that would make a natural follow-up. Prefer durable interests, relationships, communication preferences,
+social connection signals, important dates, plans, and meaningful personal events. Ignore greetings,
+filler, assistant speech, and unsupported inference.
 Never diagnose medical or mental-health conditions. One memory item should represent one claim.
 """
 
@@ -36,7 +40,7 @@ MEMORY_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "kind": {"type": "string", "enum": [
                         "interest", "relationship", "social_signal", "availability",
-                        "communication_preference", "conversation_note",
+                        "communication_preference", "conversation_note", "important_date", "plan",
                     ]},
                     "value": {"type": "string", "minLength": 1, "maxLength": 200},
                     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -48,8 +52,14 @@ MEMORY_SCHEMA: dict[str, Any] = {
                     "keywords": {
                         "type": "array", "items": {"type": "string", "maxLength": 50}, "maxItems": 10,
                     },
+                    "person": {"type": ["string", "null"], "maxLength": 100},
+                    "date": {"type": ["string", "null"], "maxLength": 10},
+                    "occasion": {"type": ["string", "null"], "maxLength": 80},
                 },
-                "required": ["kind", "value", "confidence", "evidence", "polarity", "strength", "keywords"],
+                "required": [
+                    "kind", "value", "confidence", "evidence", "polarity", "strength", "keywords",
+                    "person", "date", "occasion",
+                ],
                 "additionalProperties": False,
             },
         }
@@ -71,6 +81,9 @@ def drafts_from_payload(payload: dict[str, Any]) -> list[MemoryDraft]:
             attributes["strength"] = item["strength"]
         if item.get("keywords"):
             attributes["keywords"] = [str(value) for value in item["keywords"]]
+        for key in ("person", "date", "occasion"):
+            if item.get(key) is not None:
+                attributes[key] = str(item[key]).strip()
         try:
             drafts.append(MemoryDraft(
                 kind=str(item["kind"]),

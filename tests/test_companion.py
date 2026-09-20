@@ -1,11 +1,13 @@
 import json
 import unittest
+from datetime import datetime, timezone
 
 from companion import (
     COMPANION_INSTRUCTIONS,
     CompanionContext,
     OpenAIReplyProvider,
     build_companion_context,
+    build_timeline_context,
     detect_end_conversation,
     retrieve_companion_context,
 )
@@ -101,6 +103,29 @@ class TestCompanionContext(unittest.TestCase):
         self.assertIn("never diagnose", lowered)
         self.assertIn("emergency services", lowered)
         self.assertIn("unfinished plan", lowered)
+        self.assertIn("supplied timing context", lowered)
+        self.assertIn("expresses loneliness", lowered)
+
+    def test_timeline_describes_long_gap_and_finds_todays_event(self):
+        profile = {
+            "important_dates": [{
+                "person": "Maya", "occasion": "birthday", "date": "09-20", "value": "Maya's birthday",
+            }],
+        }
+        timeline = build_timeline_context(
+            profile,
+            {
+                "current_session": {
+                    "started_at": "2026-09-20T14:00:00+00:00", "timezone": "UTC",
+                },
+                "previous_session": {"ended_at": "2026-09-13T14:00:00+00:00"},
+            },
+            True,
+            now=datetime(2026, 9, 20, 14, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(timeline["time_since_previous_conversation"], "about one week")
+        self.assertTrue(timeline["first_turn_in_session"])
+        self.assertEqual(timeline["important_events_today"][0]["person"], "Maya")
 
     def test_end_conversation_intent_is_detected_without_false_negation(self):
         self.assertTrue(detect_end_conversation("Please end the conversation with me right now."))

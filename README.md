@@ -14,6 +14,11 @@ when `DATABASE_URL` is configured, or local JSONL during development.
 The original unredacted transcript is not written to the memory files. The
 redacted transcript is sent to the configured OpenAI memory model with `store: false`.
 
+Signup clearly discloses that useful details are saved automatically. The Life
+Space view shows extracted relationships, important dates, and plans without
+interrupting the conversation with repeated save prompts. Direct identifiers
+such as phone numbers remain redacted by the privacy filter.
+
 1. Create a virtual environment and install dependencies: `pip install -r requirements.txt`
 2. Copy `.env.example` to `.env`, then add your API and Supabase settings.
 3. Run `uvicorn main:app --reload`
@@ -82,6 +87,27 @@ user's ID. Private memory routes are now:
 - `GET /api/memory/report`
 
 Run local tests with `python3 -m unittest discover -s tests -v`.
+
+## Conversation continuity
+
+Starting a browser conversation creates a private `conversation_sessions` row
+with the user's browser timezone. The app records start, end, last-turn time,
+and turn count, then gives the companion a compact description of the gap since
+the prior conversation. The model uses this across the session to distinguish
+a quick return from reconnecting after days or weeks, without guilt-inducing or
+surveillance-like language. Saved birthdays and anniversaries that match the
+user's local date may be mentioned gently when relevant.
+
+When a user explicitly describes loneliness, the model may offer one
+low-pressure suggestion to contact a trusted person or an already accepted
+RSpace connection. It receives connection names only for that situation, never
+their email addresses.
+
+Timeline and Life Space routes are:
+
+- `POST /api/conversations/start`
+- `POST /api/conversations/{session_id}/end`
+- `GET /api/life-space`
 
 ## Matching
 

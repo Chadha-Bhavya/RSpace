@@ -11,7 +11,9 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
@@ -39,6 +41,23 @@ Memory rules:
 - Never mention a memory merely to prove that you remember it.
 - Never invent a fact or treat an uncertain memory as certain.
 - If the user's current statement conflicts with a memory, trust the current statement.
+
+Conversation timeline rules:
+- Use the supplied timing context to understand whether this is a quick return, a continuation later that day,
+  or a reunion after days or weeks. Let that affect the whole conversation, not only the greeting.
+- On the first turn after a longer gap, a brief natural acknowledgement is welcome, such as "It has been about
+  a week. How have things been?" Do not repeat the gap again during the same session.
+- After a short gap, continue naturally instead of treating the user like a stranger.
+- Never ask where the user was, imply that they owe you attention, or sound as if they were being monitored.
+- If a saved birthday or anniversary falls today and it fits the conversation, mention it gently as a friend
+  might. Do not assume that the user forgot or tell them what they must do.
+
+Human connection rules:
+- If the user expresses loneliness, first listen and acknowledge what they said.
+- Then, when it fits, offer one low-pressure option to contact a trusted person or an accepted RSpace connection.
+- Use a supplied connection name only as an optional suggestion. Never expose an email address, initiate contact,
+  pressure the user, or imply that one conversation will solve loneliness.
+- Do not turn ordinary sadness, solitude, or a quiet day into a diagnosis or crisis.
 
 Safety rules:
 - Never claim to be human, a clinician, or a replacement for loved ones.
@@ -81,6 +100,8 @@ class CompanionContext:
     recent_continuity: list[dict[str, Any]] = field(default_factory=list)
     familiarity: str = "new"
     safety_flags: list[str] = field(default_factory=list)
+    timeline: dict[str, Any] = field(default_factory=dict)
+    human_connections: list[str] = field(default_factory=list)
 
     def as_json(self) -> str:
         return json.dumps(
@@ -90,6 +111,8 @@ class CompanionContext:
                 "recent_continuity": self.recent_continuity,
                 "familiarity": self.familiarity,
                 "safety_flags": self.safety_flags,
+                "timeline": self.timeline,
+                "human_connections": self.human_connections,
             },
             ensure_ascii=False,
         )
@@ -111,6 +134,9 @@ def build_companion_context(
     profile: dict[str, Any] | None,
     search_results: list[dict[str, Any]] | None,
     safety_flags: list[str] | None = None,
+    session_context: dict[str, Any] | None = None,
+    first_turn: bool = False,
+    human_connections: list[str] | None = None,
 ) -> CompanionContext:
     """Keep only the profile fields and memories that can improve a reply."""
     source = profile or {}
@@ -119,6 +145,8 @@ def build_companion_context(
         "important_relationships": source.get("important_relationships", [])[:6],
         "communication_preferences": source.get("communication_preferences", [])[:6],
         "recent_topics": source.get("top_themes", [])[:6],
+        "important_dates": source.get("important_dates", [])[:20],
+        "plans": source.get("plans", [])[:8],
     }
     compact_profile = {key: value for key, value in compact_profile.items() if value}
 
@@ -158,7 +186,89 @@ def build_companion_context(
         recent_continuity=recent_continuity,
         familiarity=familiarity,
         safety_flags=list(safety_flags or []),
+        timeline=build_timeline_context(source, session_context or {}, first_turn),
+        human_connections=list(dict.fromkeys(human_connections or []))[:5],
     )
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _gap_description(seconds: float) -> str:
+    if seconds < 2 * 60 * 60:
+        return "less than two hours"
+    if seconds < 24 * 60 * 60:
+        return "later the same day"
+    days = max(1, round(seconds / 86400))
+    if days == 1:
+        return "about one day"
+    if days < 7:
+        return f"about {days} days"
+    if days < 14:
+        return "about one week"
+    if days < 45:
+        return f"about {round(days / 7)} weeks"
+    if days < 365:
+        return f"about {round(days / 30)} months"
+    return f"about {round(days / 365)} years"
+
+
+def build_timeline_context(
+    profile: dict[str, Any],
+    session_context: dict[str, Any],
+    first_turn: bool,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Create factual, model-ready timing context without writing a greeting."""
+    current = session_context.get("current_session") or {}
+    previous = session_context.get("previous_session") or {}
+    timezone_name = str(current.get("timezone") or "UTC")
+    try:
+        local_zone = ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        timezone_name = "UTC"
+        local_zone = timezone.utc
+    current_time = (now or datetime.now(timezone.utc)).astimezone(local_zone)
+    previous_time = _parse_timestamp(
+        previous.get("ended_at") or previous.get("last_turn_at") or previous.get("started_at")
+    )
+    started_at = _parse_timestamp(current.get("started_at"))
+    result: dict[str, Any] = {
+        "first_turn_in_session": bool(first_turn),
+        "local_date": current_time.date().isoformat(),
+        "local_time": current_time.strftime("%H:%M"),
+        "timezone": timezone_name,
+    }
+    if started_at:
+        result["current_session_started_at"] = started_at.astimezone(local_zone).isoformat()
+    if previous_time:
+        gap_seconds = max(0.0, (current_time.astimezone(timezone.utc) - previous_time.astimezone(timezone.utc)).total_seconds())
+        result["time_since_previous_conversation"] = _gap_description(gap_seconds)
+        result["previous_conversation_at"] = previous_time.astimezone(local_zone).isoformat()
+    else:
+        result["time_since_previous_conversation"] = "first recorded conversation"
+
+    month_day = current_time.strftime("%m-%d")
+    today = current_time.date().isoformat()
+    todays_events = []
+    for event in profile.get("important_dates", []):
+        event_date = str(event.get("date") or "")
+        if event_date in {month_day, today} or event_date.endswith(f"-{month_day}"):
+            todays_events.append({
+                key: event.get(key)
+                for key in ("person", "occasion", "value")
+                if event.get(key)
+            })
+    if todays_events:
+        result["important_events_today"] = todays_events[:5]
+    return result
 
 
 def retrieve_companion_context(
@@ -166,6 +276,9 @@ def retrieve_companion_context(
     user_id: str,
     user_text: str,
     safety_flags: list[str] | None = None,
+    session_context: dict[str, Any] | None = None,
+    first_turn: bool = False,
+    human_connections: list[str] | None = None,
 ) -> CompanionContext:
     """Retrieve useful memory without making conversation depend on storage."""
     try:
@@ -176,7 +289,14 @@ def retrieve_companion_context(
         results = memory.search(user_id, user_text, limit=6)
     except Exception:
         results = []
-    return build_companion_context(profile, results, safety_flags)
+    return build_companion_context(
+        profile,
+        results,
+        safety_flags,
+        session_context,
+        first_turn,
+        human_connections,
+    )
 
 
 class OpenAIReplyProvider:

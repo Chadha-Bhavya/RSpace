@@ -17,6 +17,8 @@
       .auth-tab.active { background: #176b57; color: white; }
       .auth-card label { display: block; font-weight: 700; margin: .9rem 0 .3rem; }
       .auth-card input { border: 2px solid #aeb8b2; border-radius: 12px; font: inherit; padding: .7rem .8rem; width: 100%; }
+      .consent-row { align-items: flex-start; display: flex !important; font-size: .78rem; font-weight: 500 !important; gap: .65rem; line-height: 1.4; }
+      .consent-row input { flex: 0 0 22px; height: 22px; margin: .15rem 0 0; padding: 0; width: 22px; }
       .auth-submit { background: #176b57; border: 0; border-radius: 999px; color: white; cursor: pointer; font: inherit; font-weight: 700; margin-top: 1.25rem; min-height: 56px; width: 100%; }
       #auth-message { color: #7a3030; font-weight: 650; min-height: 1.5rem; text-align: center; }
       .user-bar { align-items: center; display: flex; font-size: .85rem; justify-content: space-between; margin: 0 auto 1.5rem; max-width: 620px; }
@@ -54,6 +56,12 @@
       .block-match { background: #f3dfdf; color: #7a3030; }
       .match-empty { background: #ffffffa8; border-radius: 16px; color: #526159; font-size: .9rem; padding: 1rem; }
       .connection-email { font-weight: 700; word-break: break-all; }
+      .life-space { border-top: 1px solid #d9d7cf; margin-top: 3rem; padding-top: 2rem; text-align: left; }
+      .life-space h2 { margin: 0; }
+      .life-space-grid { display: grid; gap: .8rem; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+      .life-space-card { background: white; border-radius: 16px; box-shadow: 0 4px 16px #2f463817; padding: 1rem; }
+      .life-space-card strong { color: #176b57; display: block; font-size: .78rem; letter-spacing: .04em; text-transform: uppercase; }
+      .life-space-card p { margin: .25rem 0 0; }
       .hidden { display: none; }
       audio { margin-top: 1.5rem; width: 100%; }
     </style>
@@ -77,7 +85,13 @@
           <label for="password">Password</label>
           <input id="password" name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="128" />
           <button id="auth-submit" class="auth-submit" type="submit">Log in</button>
-          <p id="matching-disclosure" class="privacy-note hidden">Matching is always on. RSpace uses only your interests and conversation preferences. Your email stays private until you and a match both accept.</p>
+          <div id="matching-disclosure" class="hidden">
+            <p class="privacy-note">RSpace automatically saves useful details from your conversations, including people, interests, plans, birthdays, and anniversaries, so future conversations have continuity. Matching uses only interests and conversation preferences. Your email stays private until both people accept.</p>
+            <label class="consent-row" for="memory-consent">
+              <input id="memory-consent" type="checkbox" />
+              <span>I understand and agree to automatic private memory saving.</span>
+            </label>
+          </div>
           <p id="auth-message" aria-live="polite"></p>
         </form>
       </section>
@@ -104,6 +118,11 @@
         <div class="card"><strong>RSpace</strong><p id="reply"></p></div>
       </section>
       <audio id="audio" playsinline></audio>
+      <section class="life-space" aria-labelledby="life-space-title">
+        <h2 id="life-space-title">Your Life Space</h2>
+        <p class="matching-intro">Helpful details RSpace remembers to make future conversations feel connected.</p>
+        <div id="life-space-list" class="life-space-grid"><p class="match-empty">Your Life Space will grow naturally as you talk.</p></div>
+      </section>
       <section class="matching" aria-labelledby="matching-title">
         <h2 id="matching-title">People you may connect with</h2>
         <p class="matching-intro">Matches use shared interests, never private transcripts, health details, or wellness signals.</p>
@@ -139,8 +158,10 @@
       const userName = document.querySelector('#user-name');
       const logoutButton = document.querySelector('#logout');
       const matchingDisclosure = document.querySelector('#matching-disclosure');
+      const memoryConsent = document.querySelector('#memory-consent');
       const matchList = document.querySelector('#match-list');
       const connectionList = document.querySelector('#connection-list');
+      const lifeSpaceList = document.querySelector('#life-space-list');
 
       let active = false;
       let authMode = 'login';
@@ -160,6 +181,8 @@
       let currentAudioUrl;
       let liveSocket;
       let liveResultReceived = false;
+      let conversationSessionId = null;
+      let firstTurnInSession = false;
 
       const NOISE_CALIBRATION_MS = 300;
       const REQUIRED_SPEECH_MS = 160;
@@ -184,16 +207,27 @@
           analyser = audioContext.createAnalyser();
           analyser.fftSize = 2048;
           source.connect(analyser);
+          const session = await requestJson('/api/conversations/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' })
+          });
+          conversationSessionId = session.current_session?.session_id || null;
+          firstTurnInSession = true;
           active = true;
           button.textContent = 'End conversation';
           button.classList.add('stop');
           startListeningTurn();
-        } catch (_) {
-          setStatus('I could not use the microphone. Please allow microphone access and try again.');
+        } catch (error) {
+          stream?.getTracks().forEach(track => track.stop());
+          setStatus(error.message || 'I could not start the conversation. Please try again.');
         }
       }
 
       function stopConversation() {
+        const sessionToEnd = conversationSessionId;
+        conversationSessionId = null;
+        firstTurnInSession = false;
         active = false;
         cancelAnimationFrame(monitorFrame);
         if (recorder?.state === 'recording') recorder.stop();
@@ -206,6 +240,11 @@
         button.classList.remove('stop');
         micActivity.classList.add('hidden');
         setStatus('Conversation ended. I’ll be here when you want to talk again.');
+        if (sessionToEnd) {
+          authenticatedFetch(`/api/conversations/${encodeURIComponent(sessionToEnd)}/end`, {
+            method: 'POST', keepalive: true
+          }, false).catch(() => {});
+        }
       }
 
       async function startListeningTurn() {
@@ -416,6 +455,8 @@
 
           try {
             const streamed = await streamCompanionReply(transcript);
+            firstTurnInSession = false;
+            loadLifeSpace();
             if (streamed.end_conversation) {
               stopConversation();
               return;
@@ -435,8 +476,14 @@
         const companion = await requestJson('/api/companion', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: transcript })
+          body: JSON.stringify({
+            text: transcript,
+            session_id: conversationSessionId,
+            first_turn: firstTurnInSession
+          })
         });
+        firstTurnInSession = false;
+        loadLifeSpace();
         replyElement.textContent = companion.reply;
         setStatus('Here’s what I’m thinking…');
 
@@ -484,7 +531,11 @@
           let reply = '';
 
           socket.addEventListener('open', () => {
-            socket.send(JSON.stringify({ text: transcript }));
+            socket.send(JSON.stringify({
+              text: transcript,
+              session_id: conversationSessionId,
+              first_turn: firstTurnInSession
+            }));
           }, { once: true });
           socket.addEventListener('message', async event => {
             const data = JSON.parse(event.data);
@@ -631,6 +682,7 @@
         passwordInput.autocomplete = signingUp ? 'new-password' : 'current-password';
         authSubmit.textContent = signingUp ? 'Create account' : 'Log in';
         matchingDisclosure.classList.toggle('hidden', !signingUp);
+        memoryConsent.required = signingUp;
         authMessage.textContent = '';
       }
 
@@ -641,7 +693,10 @@
           email: emailInput.value.trim(),
           password: passwordInput.value
         };
-        if (authMode === 'signup') payload.name = nameInput.value.trim();
+        if (authMode === 'signup') {
+          payload.name = nameInput.value.trim();
+          payload.memory_consent = memoryConsent.checked;
+        }
         try {
           const data = await requestJson(`/api/auth/${authMode}`, {
             method: 'POST',
@@ -686,6 +741,39 @@
         authView.classList.add('hidden');
         appView.classList.remove('hidden');
         loadMatching();
+        loadLifeSpace();
+      }
+
+      async function loadLifeSpace() {
+        try {
+          renderLifeSpace(await requestJson('/api/life-space'));
+        } catch (_) {
+          lifeSpaceList.innerHTML = '<p class="match-empty">Your saved details are temporarily unavailable.</p>';
+        }
+      }
+
+      function renderLifeSpace(space) {
+        const items = [];
+        for (const event of space.important_dates || []) {
+          const title = [event.person, event.occasion].filter(Boolean).join(' · ') || 'Important date';
+          items.push({ type: 'Important date', title, detail: event.date || event.value });
+        }
+        for (const plan of space.plans || []) {
+          items.push({ type: 'Plan to remember', title: plan.value, detail: plan.date || '' });
+        }
+        for (const relationship of (space.relationships || []).slice(0, 6)) {
+          items.push({ type: 'Important person', title: relationship.relationship, detail: '' });
+        }
+        if (!items.length) {
+          lifeSpaceList.innerHTML = '<p class="match-empty">Your Life Space will grow naturally as you talk.</p>';
+          return;
+        }
+        lifeSpaceList.innerHTML = items.slice(0, 18).map(item => `
+          <article class="life-space-card">
+            <strong>${escapeHtml(item.type)}</strong>
+            <p>${escapeHtml(item.title)}</p>
+            ${item.detail ? `<p class="matching-intro">${escapeHtml(item.detail)}</p>` : ''}
+          </article>`).join('');
       }
 
       async function loadMatching() {

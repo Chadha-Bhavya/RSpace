@@ -127,6 +127,28 @@ class TestMemoryPipeline(unittest.TestCase):
         self.assertEqual(second["display_name"], "Bailey")
         self.assertNotEqual(first["email"], second["email"])
 
+    def test_conversation_timeline_tracks_previous_session(self):
+        first = self.engine.start_conversation("alice", "America/New_York")
+        first_id = first["current_session"]["session_id"]
+        self.engine.touch_conversation("alice", first_id)
+        self.engine.end_conversation("alice", first_id)
+
+        second = self.engine.start_conversation("alice", "America/New_York")
+
+        self.assertEqual(second["previous_session"]["session_id"], first_id)
+        self.assertEqual(second["previous_session"]["turn_count"], 1)
+        self.assertEqual(second["current_session"]["timezone"], "America/New_York")
+
+    def test_important_date_is_valid_memory(self):
+        text = "Maya's birthday is June 12."
+        drafts = validate_drafts(text, drafts_from_payload({"memories": [{
+            "kind": "important_date", "value": "Maya's birthday", "confidence": 0.94,
+            "evidence": text, "polarity": None, "strength": None, "keywords": ["birthday"],
+            "person": "Maya", "date": "06-12", "occasion": "birthday",
+        }]}))
+        self.assertEqual(drafts[0].kind, "important_date")
+        self.assertEqual(drafts[0].attributes["date"], "06-12")
+
 
 if __name__ == "__main__":
     unittest.main()
