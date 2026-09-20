@@ -25,8 +25,8 @@ INTEREST_SIMILARITY_THRESHOLD = 0.62
 EMBEDDING_DIMENSIONS = 384
 DEMO_MATCH_TARGET_EMAIL_HASH = "a7d39dee6e0ce9f78e1ff85de04321d4a12a43e6973c02fc998d4095bde9f1d4"
 DEMO_MATCH_USER_ID = "rspace-demo-friend"
-DEMO_MATCH_EMAIL = "demo.friend@rspace.app"
-DEMO_MATCH_NAME = "RSpace Demo Friend"
+DEMO_MATCH_EMAIL = "julia@rspace.app"
+DEMO_MATCH_NAME = "Julia"
 SENSITIVE_MATCH_PATTERN = re.compile(
     r"\b(?:lonel(?:y|iness)|depress(?:ion|ed)?|anxi(?:ety|ous)|dementia|alzheimer(?:'s)?|"
     r"suicid(?:e|al)?|self[- ]harm|cancer|diabet(?:es|ic)|diagnos\w*|disease|disorder|"
