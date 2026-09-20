@@ -91,6 +91,14 @@ ranking rather than fixed category weights. Accept, pass, block, and disconnect
 decisions train a small per-user online ranking model after five decisions.
 Email addresses are returned only after both people accept the same match.
 
+Interest similarity uses OpenAI `text-embedding-3-small` with 384 dimensions,
+using the existing `OPENAI_API_KEY`. Only privacy-filtered interest labels are
+sent to the embeddings endpoint. The resulting vectors are cached in the
+`matching_interest_embeddings` Supabase table and reused. Set
+`OPENAI_EMBEDDING_MODEL` only if a different compatible embedding model is
+required. If the API is unavailable, matching temporarily falls back to the
+local embedder and retries semantic generation during the next refresh.
+
 Supabase tables for profiles, impressions, decisions, connections, blocks, and
 ranking models are created automatically. The matching routes are:
 

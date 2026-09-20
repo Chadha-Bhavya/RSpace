@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
+
 from memory_engine.embeddings import Embedder, cosine_similarity
 
 MATCH_THRESHOLD = 0.72
@@ -19,6 +21,8 @@ MIN_SHARED_INTERESTS = 2
 MIN_LEARNING_DECISIONS = 5
 MODEL_FEATURES = 4
 ACTIVE_WINDOW = timedelta(days=90)
+INTEREST_SIMILARITY_THRESHOLD = 0.62
+EMBEDDING_DIMENSIONS = 384
 SENSITIVE_MATCH_PATTERN = re.compile(
     r"\b(?:lonel(?:y|iness)|depress(?:ion|ed)?|anxi(?:ety|ous)|dementia|alzheimer(?:'s)?|"
     r"suicid(?:e|al)?|self[- ]harm|cancer|diabet(?:es|ic)|diagnos\w*|disease|disorder|"
@@ -52,13 +56,79 @@ def _clean_values(values: Any) -> list[str]:
     return cleaned[:30]
 
 
+def _mean_vector(vectors: list[list[float]]) -> list[float]:
+    if not vectors:
+        return [0.0] * EMBEDDING_DIMENSIONS
+    dimensions = len(vectors[0])
+    mean = [sum(vector[index] for vector in vectors) / len(vectors) for index in range(dimensions)]
+    norm = math.sqrt(sum(value * value for value in mean)) or 1.0
+    return [value / norm for value in mean]
+
+
+def _normalize_vector(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+    return [value / norm for value in vector]
+
+
+class InterestEmbeddingProvider(Protocol):
+    name: str
+
+    def embed_many(self, values: list[str]) -> dict[str, list[float]]: ...
+
+
+class LocalInterestEmbeddingProvider:
+    def __init__(self, embedder: Embedder) -> None:
+        self.embedder = embedder
+        self.name = embedder.name
+
+    def embed_many(self, values: list[str]) -> dict[str, list[float]]:
+        return {value: self.embedder.embed(value) for value in values}
+
+
+class OpenAIInterestEmbeddingProvider:
+    """Meaning-based interest embeddings using OpenAI's embeddings endpoint."""
+
+    def __init__(self, api_key: str, model: str = "text-embedding-3-small") -> None:
+        self.api_key = api_key
+        self.model = model
+        self.name = f"openai:{model}:{EMBEDDING_DIMENSIONS}"
+
+    def embed_many(self, values: list[str]) -> dict[str, list[float]]:
+        if not values:
+            return {}
+        response = httpx.post(
+            "https://api.openai.com/v1/embeddings",
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            json={
+                "model": self.model,
+                "input": values,
+                "dimensions": EMBEDDING_DIMENSIONS,
+                "encoding_format": "float",
+            },
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        rows = sorted(response.json().get("data", []), key=lambda item: item.get("index", 0))
+        if len(rows) != len(values):
+            raise RuntimeError("The embedding service returned an incomplete response.")
+        embeddings: dict[str, list[float]] = {}
+        for value, row in zip(values, rows):
+            vector = [float(item) for item in row["embedding"]]
+            if len(vector) != EMBEDDING_DIMENSIONS:
+                raise RuntimeError("The embedding service returned an unexpected vector size.")
+            embeddings[value] = _normalize_vector(vector)
+        return embeddings
+
+
 @dataclass
 class MatchProfile:
     user_id: str
     display_name: str
     interests: list[str]
     communication_preferences: list[str]
+    interest_embeddings: dict[str, list[float]]
     embedding: list[float]
+    embedding_backend: str
     last_active_at: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -67,12 +137,15 @@ class MatchProfile:
             "display_name": self.display_name,
             "interests": self.interests,
             "communication_preferences": self.communication_preferences,
+            "interest_embeddings": self.interest_embeddings,
             "embedding": self.embedding,
+            "embedding_backend": self.embedding_backend,
             "last_active_at": self.last_active_at,
         }
 
 
 class MatchingRepository(Protocol):
+    def get_interest_embeddings(self, user_id: str, backend: str) -> dict[str, list[float]]: ...
     def save_profile(self, profile: MatchProfile) -> None: ...
     def list_profiles(self) -> list[MatchProfile]: ...
     def save_match(self, match: dict[str, Any]) -> None: ...
@@ -122,10 +195,26 @@ class JsonMatchingRepository:
             data["profiles"][profile.user_id] = profile.to_dict()
             self._save(data)
 
+    def get_interest_embeddings(self, user_id: str, backend: str) -> dict[str, list[float]]:
+        with self._lock:
+            profile = self._load()["profiles"].get(user_id, {})
+        if profile.get("embedding_backend") != backend:
+            return {}
+        return {
+            str(interest): [float(value) for value in vector]
+            for interest, vector in profile.get("interest_embeddings", {}).items()
+        }
+
     def list_profiles(self) -> list[MatchProfile]:
         with self._lock:
             rows = self._load()["profiles"].values()
-        return [MatchProfile(**row) for row in rows]
+        profiles = []
+        for row in rows:
+            row = dict(row)
+            row.setdefault("interest_embeddings", {})
+            row.setdefault("embedding_backend", "legacy")
+            profiles.append(MatchProfile(**row))
+        return profiles
 
     def save_match(self, match: dict[str, Any]) -> None:
         with self._lock:
@@ -235,7 +324,13 @@ class PostgresMatchingRepository:
                 """CREATE TABLE IF NOT EXISTS matching_profiles (
                     user_id text PRIMARY KEY, display_name text NOT NULL, interests jsonb NOT NULL,
                     communication_preferences jsonb NOT NULL, embedding extensions.vector(384) NOT NULL,
-                    last_active_at timestamptz NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())""",
+                    embedding_backend text NOT NULL DEFAULT '', last_active_at timestamptz NOT NULL,
+                    updated_at timestamptz NOT NULL DEFAULT now())""",
+                "ALTER TABLE matching_profiles ADD COLUMN IF NOT EXISTS embedding_backend text NOT NULL DEFAULT ''",
+                """CREATE TABLE IF NOT EXISTS matching_interest_embeddings (
+                    user_id text NOT NULL, interest text NOT NULL,
+                    embedding extensions.vector(384) NOT NULL, embedding_backend text NOT NULL,
+                    updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(user_id, interest))""",
                 """CREATE TABLE IF NOT EXISTS match_candidates (
                     match_id text PRIMARY KEY, user_a text NOT NULL, user_b text NOT NULL,
                     score double precision NOT NULL, reasons jsonb NOT NULL, features jsonb NOT NULL,
@@ -263,9 +358,20 @@ class PostgresMatchingRepository:
                 from psycopg import sql
                 for statement in statements:
                     cursor.execute(statement)
-                for table in ("matching_profiles", "match_candidates", "match_impressions", "match_decisions", "connections", "blocked_users", "ranking_models"):
+                for table in ("matching_profiles", "matching_interest_embeddings", "match_candidates", "match_impressions", "match_decisions", "connections", "blocked_users", "ranking_models"):
                     cursor.execute(sql.SQL("ALTER TABLE {} ENABLE ROW LEVEL SECURITY").format(sql.Identifier(table)))
             self._initialized = True
+
+    def get_interest_embeddings(self, user_id: str, backend: str) -> dict[str, list[float]]:
+        self._ensure_schema()
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT interest, embedding::text FROM matching_interest_embeddings "
+                "WHERE user_id=%s AND embedding_backend=%s",
+                (user_id, backend),
+            )
+            rows = cursor.fetchall()
+        return {row[0]: self._parse_vector(row[1]) for row in rows}
 
     def save_profile(self, profile: MatchProfile) -> None:
         self._ensure_schema()
@@ -273,21 +379,43 @@ class PostgresMatchingRepository:
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """INSERT INTO matching_profiles
-                   (user_id, display_name, interests, communication_preferences, embedding, last_active_at, updated_at)
-                   VALUES (%s,%s,%s,%s,%s::extensions.vector,%s,now())
+                   (user_id, display_name, interests, communication_preferences, embedding, embedding_backend, last_active_at, updated_at)
+                   VALUES (%s,%s,%s,%s,%s::extensions.vector,%s,%s,now())
                    ON CONFLICT (user_id) DO UPDATE SET display_name=EXCLUDED.display_name,
                    interests=EXCLUDED.interests, communication_preferences=EXCLUDED.communication_preferences,
-                   embedding=EXCLUDED.embedding, last_active_at=EXCLUDED.last_active_at, updated_at=now()""",
+                   embedding=EXCLUDED.embedding, embedding_backend=EXCLUDED.embedding_backend,
+                   last_active_at=EXCLUDED.last_active_at, updated_at=now()""",
                 (profile.user_id, profile.display_name, Jsonb(profile.interests), Jsonb(profile.communication_preferences),
-                 self._vector(profile.embedding), profile.last_active_at),
+                 self._vector(profile.embedding), profile.embedding_backend, profile.last_active_at),
             )
+            for interest, embedding in profile.interest_embeddings.items():
+                cursor.execute(
+                    """INSERT INTO matching_interest_embeddings
+                       (user_id,interest,embedding,embedding_backend,updated_at)
+                       VALUES (%s,%s,%s::extensions.vector,%s,now())
+                       ON CONFLICT (user_id,interest) DO UPDATE SET embedding=EXCLUDED.embedding,
+                       embedding_backend=EXCLUDED.embedding_backend,updated_at=now()""",
+                    (profile.user_id, interest, self._vector(embedding), profile.embedding_backend),
+                )
 
     def list_profiles(self) -> list[MatchProfile]:
         self._ensure_schema()
         with self._connect() as connection, connection.cursor() as cursor:
-            cursor.execute("SELECT user_id,display_name,interests,communication_preferences,embedding::text,last_active_at FROM matching_profiles")
+            cursor.execute("SELECT user_id,display_name,interests,communication_preferences,embedding::text,embedding_backend,last_active_at FROM matching_profiles")
             rows = cursor.fetchall()
-        return [MatchProfile(row[0], row[1], list(row[2]), list(row[3]), self._parse_vector(row[4]), row[5].isoformat()) for row in rows]
+            cursor.execute("SELECT user_id,interest,embedding::text,embedding_backend FROM matching_interest_embeddings")
+            interest_rows = cursor.fetchall()
+        by_user: dict[str, dict[str, list[float]]] = {}
+        for owner, interest, embedding, backend in interest_rows:
+            by_user.setdefault(owner, {})[interest] = self._parse_vector(embedding)
+        return [
+            MatchProfile(
+                row[0], row[1], list(row[2]), list(row[3]),
+                {interest: vector for interest, vector in by_user.get(row[0], {}).items() if interest in set(row[2])},
+                self._parse_vector(row[4]), row[5], row[6].isoformat(),
+            )
+            for row in rows
+        ]
 
     def save_match(self, match: dict[str, Any]) -> None:
         self._ensure_schema()
@@ -387,10 +515,18 @@ class PostgresMatchingRepository:
 
 
 class MatchingEngine:
-    def __init__(self, memory: Any, repository: MatchingRepository, embedder: Embedder) -> None:
+    def __init__(
+        self,
+        memory: Any,
+        repository: MatchingRepository,
+        embedder: Embedder,
+        interest_embedder: InterestEmbeddingProvider | None = None,
+    ) -> None:
         self.memory = memory
         self.repository = repository
         self.embedder = embedder
+        self.local_interest_embedder = LocalInterestEmbeddingProvider(embedder)
+        self.interest_embedder = interest_embedder or self.local_interest_embedder
 
     def _safe_profile(self, account: dict[str, Any]) -> MatchProfile:
         user_id = str(account["user_id"])
@@ -400,15 +536,25 @@ class MatchingEngine:
             if isinstance(item, dict) and item.get("current_polarity") == "positive"
         ])
         communication = _clean_values(memory_profile.get("communication_preferences", []))
-        # This string contains only approved matching fields. Raw transcripts,
-        # evidence, relationships, wellness signals and medical data never enter it.
-        embedding_text = "Interests: " + ", ".join(interests) + ". Communication: " + ", ".join(communication)
+        cached = self.repository.get_interest_embeddings(user_id, self.interest_embedder.name)
+        missing = [interest for interest in interests if interest not in cached]
+        backend = self.interest_embedder.name
+        try:
+            generated = self.interest_embedder.embed_many(missing)
+            interest_embeddings = {interest: cached.get(interest) or generated[interest] for interest in interests}
+        except (httpx.HTTPError, KeyError, RuntimeError, ValueError):
+            # Conversation remains available if the embedding API is temporarily
+            # unavailable. The next refresh retries the semantic provider.
+            backend = self.local_interest_embedder.name
+            interest_embeddings = self.local_interest_embedder.embed_many(interests)
         return MatchProfile(
             user_id=user_id,
             display_name=str(account.get("display_name") or "RSpace member")[:80],
             interests=interests,
             communication_preferences=communication,
-            embedding=self.embedder.embed(embedding_text),
+            interest_embeddings=interest_embeddings,
+            embedding=_mean_vector(list(interest_embeddings.values())),
+            embedding_backend=backend,
             last_active_at=str(account.get("updated_at") or _now()),
         )
 
@@ -419,10 +565,10 @@ class MatchingEngine:
     def _shared(self, left: MatchProfile, right: MatchProfile) -> list[str]:
         choices: list[tuple[float, str, str]] = []
         for first in left.interests:
-            first_embedding = self.embedder.embed(first)
+            first_embedding = left.interest_embeddings.get(first, [])
             for second in right.interests:
-                score = cosine_similarity(first_embedding, self.embedder.embed(second))
-                if first == second or score >= 0.72:
+                score = cosine_similarity(first_embedding, right.interest_embeddings.get(second, []))
+                if first == second or score >= INTEREST_SIMILARITY_THRESHOLD:
                     choices.append((1.0 if first == second else score, first, second))
         shared: list[str] = []
         used_right: set[str] = set()
@@ -504,7 +650,12 @@ class MatchingEngine:
             features = self._features(current, other, shared)
             reciprocal_rank = math.sqrt(ranks[(user_id, other_id)] * ranks[(other_id, user_id)])
             rank_strength = 1.0 / reciprocal_rank
-            cold_score = math.sqrt(max(0.0, semantic) * rank_strength)
+            # Two independently shared interests are strong cold-start evidence.
+            # This saturating curve avoids fixed category weights while keeping
+            # one broad similarity from being mistaken for a match.
+            shared_evidence = 1.0 - math.exp(-len(shared))
+            match_quality = max(semantic, shared_evidence)
+            cold_score = math.sqrt(match_quality * rank_strength)
             reverse_features = self._features(other, current, shared)
             left_probability = self._predict(user_id, features, cold_score)
             right_probability = self._predict(other_id, reverse_features, cold_score)
@@ -582,4 +733,10 @@ class MatchingEngine:
 def create_matching_engine(memory: Any, data_root: Path) -> MatchingEngine:
     database_url = os.getenv("DATABASE_URL", "").strip()
     repository: MatchingRepository = PostgresMatchingRepository(database_url) if database_url else JsonMatchingRepository(data_root)
-    return MatchingEngine(memory, repository, memory.embedder)
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small").strip()
+    interest_embedder: InterestEmbeddingProvider = (
+        OpenAIInterestEmbeddingProvider(api_key, model) if api_key and not api_key.startswith("your_")
+        else LocalInterestEmbeddingProvider(memory.embedder)
+    )
+    return MatchingEngine(memory, repository, memory.embedder, interest_embedder)
