@@ -45,7 +45,12 @@ const navigationItems = [
 
 export default function SiteHeader() {
   return (
-    <header className="sticky top-0 z-50 w-screen bg-[var(--sky)]">
+    <header className="sticky top-0 z-50 w-full">
+      <img
+        src="/stars.svg"
+        alt="RSpace logo"
+        className="z-100 absolute top-4 left-4 size-25"
+      />
       <svg
         className="absolute size-0"
         aria-hidden="true"

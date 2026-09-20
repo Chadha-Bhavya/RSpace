@@ -2,11 +2,16 @@ import SiteHeader from "@/app/components/SiteHeader";
 
 export default function Home() {
   return (
-    <main className="flex flex-col min-h-screen bg-[var(--sky)]">
+    <main className="flex flex-col gap-8 min-h-screen bg-[var(--sky)]">
       <SiteHeader />
-      <section className="justify-self-center flex flex-col max-w-[75vw] bg-white h-100">
-        {/* center this.... */}
-      </section>
+      <main className="flex flex-col w-full max-w-[67vw] mx-auto">
+        <section className="flex flex-col gap-4">
+          <h1 className="text-7xl font-bold mb-4">Home</h1>
+          <p>
+            (relevant stats or data here)
+          </p>
+        </section>
+      </main>
     </main>
   );
 }

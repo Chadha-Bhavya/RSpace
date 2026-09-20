@@ -3,6 +3,7 @@
 :root {
   --sky: #80D4FF;
   --periwinkle: #809FFF;
+  --skywinkle: #80BAFF;
   --lemon: #FFFF80;
   --periwinkle-2: #838dff;
   --periwinkle-3: #9183ff;
@@ -12,13 +13,15 @@
 }
 
 @theme {
-  --button-hover-scale: 1.05;
+  --button-hover-scale: 1.025;
   --button-hover-brightness: 1.1;
 
   --animate-wave-breathe-x: wave-breathe-x 30s ease-in-out infinite;
   --animate-wave-breathe-x-delay5s: wave-breathe-x 30s ease-in-out 5s infinite;
   --animate-wave-breathe-y: wave-breathe-y 30s ease-in-out infinite;
   --animate-wave-breathe-y-delay5s: wave-breathe-y 30s ease-in-out 5s infinite;
+  --animate-moving-down: moving-down 2s ease-in-out infinite;
+  --animate-star-pulse: star-pulse 5s ease-in-out infinite;
 
   @keyframes wave-breathe-x {
     from {
@@ -42,6 +45,37 @@
       transform: scale(1, 2) translate(0%, 0%);
     }
   }
+  @keyframes moving-down {
+    from {
+      transform: translate(0%, -10%);
+      opacity: 0;
+    }
+    50% {
+      transform: translate(0%, 0%);
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+      transform: translate(0%, 10%);
+    }
+  }
+  @keyframes star-pulse {
+    from {
+      opacity: 0;
+    }
+    50% {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+}
+
+button {
+  transition: all;
+  transition-timing-function: ease-in-out;
+  transition-duration: 0.1s;
 }
 
 button:hover,

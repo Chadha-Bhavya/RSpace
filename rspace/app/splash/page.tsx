@@ -6,9 +6,8 @@ export default function Home() {
   const [register, setRegister] = useState<boolean>(false);
 
   return (
-    <main
-      className="relative block min-h-screen bg-[var(--sky)] sm:grid sm:grid-cols-[1.08fr_.92fr] sm:overflow-hidden"
-    >
+    <main className="block">
+      <div className="relative h-screen overflow-hidden bg-[var(--sky)] sm:grid sm:grid-cols-[1.08fr_.92fr]">
       <svg
         className="pointer-events-none absolute inset-0 z-0 size-full"
         viewBox="0 0 100 100"
@@ -56,7 +55,7 @@ export default function Home() {
       </svg>
 
       <section
-        className="relative z-10 grid min-h-[50vh] place-items-center px-8 py-16 sm:min-h-screen sm:p-[clamp(2rem,7vw,7rem)]"
+        className="relative z-10 grid h-1/2 place-items-center px-8 py-16 sm:h-full sm:p-[clamp(2rem,7vw,7rem)]"
         aria-labelledby="rspace-heading"
       >
         <div className="flex w-full max-w-[39rem] flex-col gap-8 sm:pb-8">
@@ -68,13 +67,25 @@ export default function Home() {
             Space
           </h1>
           <p className="max-w-[22rem] text-[clamp(1.55rem,2.6vw,2.25rem)] font-bold leading-[1.15] text-[var(--ink)]">
-            Connect with others easily.
+            Connect with others, care for yourself
           </p>
+          <div className="relative -mb-8 self-start size-50"> {/* act as a frame so i can overlap two svgs on top of each other */}
+            <img
+              src="/stars.svg"
+              alt="RSpace logo with stars"
+              className="absolute animate-star-pulse z-10 size-50"
+            />
+            <img
+              src="/nostars.svg"
+              alt="RSpace logo without stars"
+              className="absolute size-50"
+            />
+          </div>
         </div>
       </section>
 
       <section
-        className="relative z-10 grid min-h-[50vh] place-items-center px-8 py-16 sm:min-h-screen sm:p-[clamp(2rem,7vw,7rem)]"
+        className="relative z-10 grid h-1/2 place-items-center px-8 py-16 sm:h-full sm:p-[clamp(2rem,7vw,7rem)]"
         aria-labelledby="signin-heading"
       >
         <div className="flex w-full max-w-[27rem] flex-col gap-4 text-[var(--ink)]">
@@ -128,6 +139,39 @@ export default function Home() {
             </button>
           </form>
         </div>
+      </section>
+      
+      <div className="flex flex-row gap-8 pointer-events-none absolute left-0 right-0 bottom-5 z-10 flex items-center justify-center">
+        <span className="animate-moving-down text-xl font-extrabold scale-x-150">🡳</span>
+        <span className="font-bold tracking-[0.4]">
+          Scroll down to find out more about RSpace
+        </span>
+        <span className="animate-moving-down text-xl font-extrabold scale-x-150">🡳</span>
+      </div>
+
+      </div>
+
+      <section
+        className="bg-[var(--skywinkle)]"
+        aria-label="Additional content"
+      >
+        <main className="py-[20vh] flex flex-col w-full max-w-[67vw] mx-auto">
+          <section className="flex flex-col gap-4">
+            <h1 className="text-7xl font-bold mb-4">What is RSpace?</h1>
+            <p>
+              RSpace is a social media/wellness app designed for older audiences.
+              Its interface is designed to be accessible and intuitive,
+              and its wellness features include
+            </p>
+            <ul className="list-disc pl-6">
+              <li>Our comforting AI chatbot, Spi, to advise and comfort users</li>
+              <li>A wellness checker that uses its knowledge of the user to suggest nourishing actions.</li>
+            </ul>
+            <p>
+              Register an account and try RSpace for yourself!
+            </p>
+          </section>
+        </main>
       </section>
     </main>
   );
