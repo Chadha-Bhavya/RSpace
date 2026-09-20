@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .embeddings import Embedder, create_embedder
+from .elastic import ElasticsearchMemoryIndex, create_elasticsearch_index
 from .extractor import MemoryExtractor, create_extractor
 from .filters import filter_text
 from .models import MemoryDraft, MemoryEvent
@@ -23,6 +24,7 @@ class MemoryEngine:
         embedder: Embedder | None = None,
         store: MemoryStore | None = None,
         extractor: MemoryExtractor | None = None,
+        elastic_index: ElasticsearchMemoryIndex | None = None,
     ) -> None:
         database_url = os.getenv("DATABASE_URL", "").strip()
         self.store: MemoryStore = store or (
@@ -30,6 +32,7 @@ class MemoryEngine:
         )
         self.embedder = embedder or create_embedder()
         self.extractor = extractor or create_extractor()
+        self.elastic_index = elastic_index or create_elasticsearch_index()
 
     def process(self, user_id: str, transcript: str) -> dict[str, Any]:
         user_id = self.store.safe_user_id(user_id)
@@ -60,6 +63,13 @@ class MemoryEngine:
             ))
 
         self.store.append_events(user_id, events)
+        if self.elastic_index:
+            try:
+                self.elastic_index.index_events(events)
+            except Exception:
+                # Elastic is a secondary index. Never lose a memory or stop a conversation
+                # because it is unavailable.
+                pass
         all_events = existing + events
         profile = build_profile(user_id, all_events, self.embedder.name)
         self.store.save_profile(user_id, profile)
@@ -85,9 +95,29 @@ class MemoryEngine:
         self.store.save_profile(user_id, profile)
         return profile
 
-    def search(self, user_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    def search(
+        self, user_id: str, query: str, limit: int = 5,
+        category: str | None = None, date_from: str | None = None, date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
         user_id = self.store.safe_user_id(user_id)
-        return hybrid_search(query, self.store.load_events(user_id), self.embedder, max(1, min(limit, 20)))
+        limit = max(1, min(limit, 20))
+        if self.elastic_index:
+            try:
+                results = self.elastic_index.search(
+                    user_id, query, self.embedder.embed(query), limit, category, date_from, date_to
+                )
+                if results:
+                    return results
+            except Exception:
+                pass
+        events = self.store.load_events(user_id)
+        if category:
+            events = [event for event in events if event.kind == category]
+        if date_from:
+            events = [event for event in events if event.timestamp >= date_from]
+        if date_to:
+            events = [event for event in events if event.timestamp <= date_to]
+        return hybrid_search(query, events, self.embedder, limit)
 
     def report(self, user_id: str) -> dict[str, Any]:
         return build_wellness_report(self.profile(user_id))

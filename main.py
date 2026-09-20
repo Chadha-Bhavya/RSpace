@@ -697,10 +697,15 @@ async def memory_profile(user: dict = Depends(require_user)) -> dict[str, object
 async def search_memory(
     q: str = Query(min_length=1, max_length=500),
     limit: int = Query(default=5, ge=1, le=20),
+    category: str | None = Query(default=None, max_length=80),
+    date_from: str | None = Query(default=None, max_length=40),
+    date_to: str | None = Query(default=None, max_length=40),
     user: dict = Depends(require_user),
 ) -> list[dict]:
     try:
-        return await asyncio.to_thread(app.state.memory.search, str(user["id"]), q, limit)
+        return await asyncio.to_thread(
+            app.state.memory.search, str(user["id"]), q, limit, category, date_from, date_to
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

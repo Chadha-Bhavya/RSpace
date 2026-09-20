@@ -14,6 +14,12 @@ when `DATABASE_URL` is configured, or local JSONL during development.
 The original unredacted transcript is not written to the memory files. The
 redacted transcript is sent to the configured OpenAI memory model with `store: false`.
 
+When `ELASTICSEARCH_URL` and `ELASTIC_API_KEY` are configured, every approved
+memory is also written to an `rspace-memories` secondary index. Companion recall
+uses hybrid full-text and 384-dimensional vector search, always filtered by the
+authenticated user ID. PostgreSQL remains the source of truth, and retrieval
+automatically falls back to pgvector/local search if Elastic is unavailable.
+
 Signup clearly discloses that useful details are saved automatically. The Life
 Space view shows extracted relationships, important dates, and plans without
 interrupting the conversation with repeated save prompts. Direct identifiers
