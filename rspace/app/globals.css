@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'OpenDyslexic';
+  src: url('/OpenDyslexic-Regular.otf') format('opentype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --sky: #80D4FF;
   --periwinkle: #809FFF;
@@ -12,6 +20,10 @@
   --ink: #17334d;
 }
 
+h1, h2, h3, h4, h5, h6 {
+  @apply text-shadow-xs text-shadow-black/10;
+}
+
 @theme {
   --button-hover-scale: 1.025;
   --button-hover-brightness: 1.1;
@@ -22,6 +34,9 @@
   --animate-wave-breathe-y-delay5s: wave-breathe-y 30s ease-in-out 5s infinite;
   --animate-moving-down: moving-down 2s ease-in-out infinite;
   --animate-star-pulse: star-pulse 5s ease-in-out infinite;
+  --animate-fade-in: fade-in 0.5s ease-out both;
+  --animate-fade-in-delay0.5s: fade-in 0.5s ease-out 0.5s both;
+  --animate-fade-in-delay1s: fade-in 0.5s ease-out 1s both;
 
   @keyframes wave-breathe-x {
     from {
@@ -70,6 +85,207 @@
       opacity: 0;
     }
   }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes square-pulse {
+    0% {
+      transform: rotate(var(--rotation, 0deg)) scale(var(--scale, 1));
+    }
+    50% {
+      transform: rotate(calc(var(--rotation, 0deg) + 10deg)) scale(calc(var(--scale, 1) * 1.5));
+    }
+    100% {
+      transform: rotate(var(--rotation, 0deg)) scale(var(--scale, 1));
+    }
+  }
+}
+
+/* not custom classes because devin is a little jokester */
+.animate-square-pulse-delay-0s {
+  animation: square-pulse 60s ease-in-out -0s infinite;
+}
+.animate-square-pulse-delay-1s {
+  animation: square-pulse 60s ease-in-out -1s infinite;
+}
+.animate-square-pulse-delay-2s {
+  animation: square-pulse 60s ease-in-out -2s infinite;
+}
+.animate-square-pulse-delay-3s {
+  animation: square-pulse 60s ease-in-out -3s infinite;
+}
+.animate-square-pulse-delay-4s {
+  animation: square-pulse 60s ease-in-out -4s infinite;
+}
+.animate-square-pulse-delay-5s {
+  animation: square-pulse 60s ease-in-out -5s infinite;
+}
+.animate-square-pulse-delay-6s {
+  animation: square-pulse 60s ease-in-out -6s infinite;
+}
+.animate-square-pulse-delay-7s {
+  animation: square-pulse 60s ease-in-out -7s infinite;
+}
+.animate-square-pulse-delay-8s {
+  animation: square-pulse 60s ease-in-out -8s infinite;
+}
+.animate-square-pulse-delay-9s {
+  animation: square-pulse 60s ease-in-out -9s infinite;
+}
+.animate-square-pulse-delay-10s {
+  animation: square-pulse 60s ease-in-out -10s infinite;
+}
+.animate-square-pulse-delay-11s {
+  animation: square-pulse 60s ease-in-out -11s infinite;
+}
+.animate-square-pulse-delay-12s {
+  animation: square-pulse 60s ease-in-out -12s infinite;
+}
+.animate-square-pulse-delay-13s {
+  animation: square-pulse 60s ease-in-out -13s infinite;
+}
+.animate-square-pulse-delay-14s {
+  animation: square-pulse 60s ease-in-out -14s infinite;
+}
+.animate-square-pulse-delay-15s {
+  animation: square-pulse 60s ease-in-out -15s infinite;
+}
+.animate-square-pulse-delay-16s {
+  animation: square-pulse 60s ease-in-out -16s infinite;
+}
+.animate-square-pulse-delay-17s {
+  animation: square-pulse 60s ease-in-out -17s infinite;
+}
+.animate-square-pulse-delay-18s {
+  animation: square-pulse 60s ease-in-out -18s infinite;
+}
+.animate-square-pulse-delay-19s {
+  animation: square-pulse 60s ease-in-out -19s infinite;
+}
+.animate-square-pulse-delay-20s {
+  animation: square-pulse 60s ease-in-out -20s infinite;
+}
+.animate-square-pulse-delay-21s {
+  animation: square-pulse 60s ease-in-out -21s infinite;
+}
+.animate-square-pulse-delay-22s {
+  animation: square-pulse 60s ease-in-out -22s infinite;
+}
+.animate-square-pulse-delay-23s {
+  animation: square-pulse 60s ease-in-out -23s infinite;
+}
+.animate-square-pulse-delay-24s {
+  animation: square-pulse 60s ease-in-out -24s infinite;
+}
+.animate-square-pulse-delay-25s {
+  animation: square-pulse 60s ease-in-out -25s infinite;
+}
+.animate-square-pulse-delay-26s {
+  animation: square-pulse 60s ease-in-out -26s infinite;
+}
+.animate-square-pulse-delay-27s {
+  animation: square-pulse 60s ease-in-out -27s infinite;
+}
+.animate-square-pulse-delay-28s {
+  animation: square-pulse 60s ease-in-out -28s infinite;
+}
+.animate-square-pulse-delay-29s {
+  animation: square-pulse 60s ease-in-out -29s infinite;
+}
+.animate-square-pulse-delay-30s {
+  animation: square-pulse 60s ease-in-out -30s infinite;
+}
+.animate-square-pulse-delay-31s {
+  animation: square-pulse 60s ease-in-out -31s infinite;
+}
+.animate-square-pulse-delay-32s {
+  animation: square-pulse 60s ease-in-out -32s infinite;
+}
+.animate-square-pulse-delay-33s {
+  animation: square-pulse 60s ease-in-out -33s infinite;
+}
+.animate-square-pulse-delay-34s {
+  animation: square-pulse 60s ease-in-out -34s infinite;
+}
+.animate-square-pulse-delay-35s {
+  animation: square-pulse 60s ease-in-out -35s infinite;
+}
+.animate-square-pulse-delay-36s {
+  animation: square-pulse 60s ease-in-out -36s infinite;
+}
+.animate-square-pulse-delay-37s {
+  animation: square-pulse 60s ease-in-out -37s infinite;
+}
+.animate-square-pulse-delay-38s {
+  animation: square-pulse 60s ease-in-out -38s infinite;
+}
+.animate-square-pulse-delay-39s {
+  animation: square-pulse 60s ease-in-out -39s infinite;
+}
+.animate-square-pulse-delay-40s {
+  animation: square-pulse 60s ease-in-out -40s infinite;
+}
+.animate-square-pulse-delay-41s {
+  animation: square-pulse 60s ease-in-out -41s infinite;
+}
+.animate-square-pulse-delay-42s {
+  animation: square-pulse 60s ease-in-out -42s infinite;
+}
+.animate-square-pulse-delay-43s {
+  animation: square-pulse 60s ease-in-out -43s infinite;
+}
+.animate-square-pulse-delay-44s {
+  animation: square-pulse 60s ease-in-out -44s infinite;
+}
+.animate-square-pulse-delay-45s {
+  animation: square-pulse 60s ease-in-out -45s infinite;
+}
+.animate-square-pulse-delay-46s {
+  animation: square-pulse 60s ease-in-out -46s infinite;
+}
+.animate-square-pulse-delay-47s {
+  animation: square-pulse 60s ease-in-out -47s infinite;
+}
+.animate-square-pulse-delay-48s {
+  animation: square-pulse 60s ease-in-out -48s infinite;
+}
+.animate-square-pulse-delay-49s {
+  animation: square-pulse 60s ease-in-out -49s infinite;
+}
+.animate-square-pulse-delay-50s {
+  animation: square-pulse 60s ease-in-out -50s infinite;
+}
+.animate-square-pulse-delay-51s {
+  animation: square-pulse 60s ease-in-out -51s infinite;
+}
+.animate-square-pulse-delay-52s {
+  animation: square-pulse 60s ease-in-out -52s infinite;
+}
+.animate-square-pulse-delay-53s {
+  animation: square-pulse 60s ease-in-out -53s infinite;
+}
+.animate-square-pulse-delay-54s {
+  animation: square-pulse 60s ease-in-out -54s infinite;
+}
+.animate-square-pulse-delay-55s {
+  animation: square-pulse 60s ease-in-out -55s infinite;
+}
+.animate-square-pulse-delay-56s {
+  animation: square-pulse 60s ease-in-out -56s infinite;
+}
+.animate-square-pulse-delay-57s {
+  animation: square-pulse 60s ease-in-out -57s infinite;
+}
+.animate-square-pulse-delay-58s {
+  animation: square-pulse 60s ease-in-out -58s infinite;
+}
+.animate-square-pulse-delay-59s {
+  animation: square-pulse 60s ease-in-out -59s infinite;
 }
 
 button {
@@ -80,6 +296,11 @@ button {
 
 button:hover,
 nav a:hover {
+  cursor: pointer;
   scale: var(--button-hover-scale);
   filter: brightness(var(--button-hover-brightness));
+}
+
+.font-opendyslexic {
+  font-family: 'OpenDyslexic', sans-serif;
 }

@@ -1,6 +1,7 @@
 "use client"
 
 import SiteHeader from "@/app/components/SiteHeader";
+import { SquigglyBorders } from "@/app/components/SquigglyBorders";
 import { useState } from "react";
 
 type User = {
@@ -16,12 +17,12 @@ type Message = {
   fromMe: boolean,
 }
 
-type Chat = {
+type Conversation = {
   user: User,
   messages: Message[],
 }
 
-const chats: Chat[] = [
+const chats: Conversation[] = [
   {
     user: { givenName: "Margaret", surname: "Chen", pfp: "MC" },
     messages: [
@@ -75,34 +76,65 @@ function formatTime(date: Date) {
   });
 }
 
-function lastMessage(chat: Chat) {
+function lastMessage(chat: Conversation) {
   return chat.messages[chat.messages.length - 1];
 }
 
 export default function TalkWithOthersPage() {
-  const [selectedChat, setSelectedChat] = useState<number>(0);
-  const activeChat = chats[selectedChat];
+  const [selectedConversation, setSelectedConversation] = useState<number>(0);
+  const [conversationList, setConversationList] = useState<Conversation[]>(chats);
+  const activeConversation = conversationList[selectedConversation];
 
-  const handleChatSelection = (index: number) => {
-    setSelectedChat(index);
-    chats[index].messages = chats[index].messages.map((message) => {
+  const handleConversationSelection = (index: number) => {
+    setSelectedConversation(index);
+    const updatedConversations = [...conversationList];
+    updatedConversations[index].messages = updatedConversations[index].messages.map((message) => {
       message.read = true;
       return message;
     });
+    setConversationList(updatedConversations);
+  }
+
+  const handleSendMessage = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const input = form.querySelector('input') as HTMLInputElement;
+    const text = input.value.trim();
+    
+    if (!text) return;
+
+    const newMessage: Message = {
+      text,
+      sent: new Date(),
+      read: false,
+      fromMe: true,
+    };
+
+    const updatedConversations = [...conversationList];
+    updatedConversations[selectedConversation].messages = [
+      ...updatedConversations[selectedConversation].messages,
+      newMessage,
+    ];
+    setConversationList(updatedConversations);
+    input.value = '';
   }
 
   return (
     <main className="flex flex-col min-h-screen bg-[var(--sky)]">
+      <SquigglyBorders />
       <SiteHeader />
       <main className="flex flex-col my-8 w-full max-w-[67vw] mx-auto">
         <section className="flex flex-col gap-8">
           <div className="flex flex-row justify-between">
-            <h1 className="text-6xl font-bold">Talk with Others</h1>
-            <button className="self-end p-5 rounded-2xl text-lg font-bold bg-(--lemon)">
+            <h1 className="animate-fade-in text-6xl font-bold">Talk with Others</h1>
+            <button 
+              className="animate-fade-in-delay0.5s self-end px-9 py-5 text-lg font-bold bg-(--lemon) shadow-md"
+              style={{ clipPath: "url(#squiggly-button)" }}
+            >
               Match me with a new friend!
             </button>
           </div>
-          <div className="flex flex-row w-full h-200 overflow-hidden rounded-2xl">
+          <div className="animate-fade-in-delay0.5s flex flex-row w-full h-200 overflow-hidden rounded-2xl">
             <div className="flex flex-1 flex-col overflow-y-auto rounded-l-2xl bg-gray-100">
               <div className="flex items-center gap-3 font-semibold text-2xl border-b border-black/10 bg-white/60 px-5 py-3 h-20">
                 <img
@@ -110,21 +142,24 @@ export default function TalkWithOthersPage() {
                   alt="Speech bubble icon"
                   className="size-7.5 mx-1.5"
                 />
-                Conversations
+                <div className="flex flex-col">
+                  <p>Conversations</p>
+                  <p className="text-[10px] text-gray-700">Click a name below to view your conversation with them</p>
+                </div>
               </div>
-              {chats.map((chat, index) => {
+              {conversationList.map((chat, index) => {
                 const latest = lastMessage(chat);
                 const unreadCount = chat.messages
                   .map((message) => +(!message.read && !message.fromMe))
                   .reduce((acc, cur) => acc += cur);
-                const selected = index === selectedChat;
+                const selected = index === selectedConversation;
 
                 return (
                   <button
                     key={`${chat.user.givenName}-${chat.user.surname}`}
                     type="button"
-                    className={`p-4 flex w-full items-center gap-3 border-b border-black/5 px-4 py-3 text-left ${selected ? "bg-white" : "bg-transparent hover:bg-white/70"}`}
-                    onClick={() => handleChatSelection(index)}
+                    className={`p-4 flex w-full items-center gap-3 border-b border-black/5 px-4 py-3 text-left ${selected ? "bg-linear-to-r from-white via-67 via-white to-gray-200" : "bg-transparent hover:bg-white/70"}`}
+                    onClick={() => handleConversationSelection(index)}
                     aria-pressed={selected}
                   >
                     <span className="grid size-12 shrink-0 place-items-center rounded-full bg-[var(--periwinkle)] font-bold text-[var(--ink)]">
@@ -150,17 +185,17 @@ export default function TalkWithOthersPage() {
             <div className="flex flex-2 flex-col rounded-r-2xl bg-gray-200">
               <div className="flex items-center gap-3 border-b border-black/10 bg-white/60 px-5 py-3 h-20">
                 <span className="grid size-11 place-items-center rounded-full bg-[var(--periwinkle)] font-bold text-[var(--ink)]">
-                  {activeChat.user.pfp}
+                  {activeConversation.user.pfp}
                 </span>
                 <div>
                   <p className="font-bold text-[var(--ink)]">
-                    {activeChat.user.givenName} {activeChat.user.surname}
+                    {activeConversation.user.givenName} {activeConversation.user.surname}
                   </p>
                   <p className="text-sm text-black/50">Active now</p>
                 </div>
               </div>
               <div className="p-4 flex flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
-                {activeChat.messages.map((message) => (
+                {activeConversation.messages.map((message) => (
                   <div
                     key={`${message.sent.toISOString()}-${message.text}`}
                     className={`flex ${message.fromMe ? "justify-end" : "justify-start"}`}
@@ -179,17 +214,18 @@ export default function TalkWithOthersPage() {
               </div>
               <form
                 className="flex gap-2 border-t border-black/10 bg-white/60 px-4 py-3"
-                onSubmit={(event) => event.preventDefault()}
+                onSubmit={handleSendMessage}
               >
                 <input
                   className="min-h-12 flex-1 rounded-full border-[3px] border-[var(--ink)] bg-white px-4 outline-none focus:outline-4 focus:outline-offset-2 focus:outline-[var(--lemon)]"
                   type="text"
-                  placeholder={`Message ${activeChat.user.givenName}…`}
-                  aria-label={`Message ${activeChat.user.givenName}`}
+                  placeholder={`Message ${activeConversation.user.givenName}…`}
+                  aria-label={`Message ${activeConversation.user.givenName}`}
                 />
                 <button
-                  className="rounded-full bg-[var(--lemon)] px-5 font-bold"
+                  className="bg-[var(--lemon)] px-9 py-2 font-bold shadow-md"
                   type="submit"
+                  style={{ clipPath: "url(#squiggly-button)" }}
                 >
                   Send
                 </button>

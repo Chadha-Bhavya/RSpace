@@ -1,3 +1,5 @@
+import { SquigglyBorders } from "./SquigglyBorders";
+
 const navigationItems = [
   {
     label: "Home",
@@ -6,6 +8,9 @@ const navigationItems = [
     position: "left-0",
     width: "w-1/3",
     zIndex: "z-[1]",
+    mobileRow: "top",
+    mobilePosition: "left-0",
+    mobileWidth: "w-1/2",
   },
   {
     label: "Talk with Others",
@@ -15,6 +20,9 @@ const navigationItems = [
     width: "w-[20%]",
     zIndex: "z-[10]",
     clipPaths: ["header-item-wave-1", "header-item-wave-2"],
+    mobileRow: "top",
+    mobilePosition: "left-1/2",
+    mobileWidth: "w-1/2",
   },
   {
     label: "Talk to Spi",
@@ -23,6 +31,9 @@ const navigationItems = [
     position: "left-1/3",
     width: "w-1/3",
     zIndex: "z-[2]",
+    mobileRow: "bottom",
+    mobilePosition: "left-0",
+    mobileWidth: "w-1/3",
   },
   {
     label: "Wellness Check",
@@ -32,6 +43,9 @@ const navigationItems = [
     width: "w-[20%]",
     zIndex: "z-[10]",
     clipPaths: ["header-item-wave-3", "header-item-wave-4"],
+    mobileRow: "bottom",
+    mobilePosition: "left-1/3",
+    mobileWidth: "w-1/3",
   },
   {
     label: "Settings",
@@ -40,17 +54,29 @@ const navigationItems = [
     position: "left-2/3",
     width: "w-1/3",
     zIndex: "z-[3]",
+    mobileRow: "bottom",
+    mobilePosition: "left-2/3",
+    mobileWidth: "w-1/3",
   },
 ];
 
 export default function SiteHeader() {
   return (
-    <header className="sticky top-0 z-50 w-full">
+    <header className="sticky top-0 z-50 w-full pb-0 sm:pb-12">
+      <SquigglyBorders />
       <img
         src="/stars.svg"
         alt="RSpace logo"
-        className="z-100 absolute top-4 left-4 size-25"
+        className="z-100 absolute top-4 left-4 size-25 hidden sm:block"
       />
+      <a href="/splash">
+        <button 
+          className="z-100 absolute -bottom-10 right-4 px-7 py-3 font-semibold bg-(--lemon) shadow-md sm:top-4 sm:bottom-auto"
+          style={{ clipPath: "url(#squiggly-button)" }}
+        >
+          Sign Out
+        </button>
+      </a>
       <svg
         className="absolute size-0"
         aria-hidden="true"
@@ -77,8 +103,27 @@ export default function SiteHeader() {
         </defs>
       </svg>
 
+      {/* Mobile Navigation */}
       <nav
-        className="z-50 relative h-32 overflow-hidden"
+        className="z-50 relative h-32 overflow-hidden sm:hidden"
+        aria-label="Main navigation"
+      >
+        {navigationItems.map((item) => (
+          <a
+            key={item.label}
+            className={`absolute ${item.mobileRow === "top" ? "top-0 h-1/2" : "bottom-0 h-1/2"} ${item.mobilePosition} ${item.mobileWidth} ${item.zIndex} flex items-center justify-center text-center text-xs font-bold text-[var(--ink)] outline-none transition-[filter,scale] focus-visible:scale-105 focus-visible:brightness-100 ${item.color}`}
+            href={item.href}
+          >
+            <span className="relative z-10 whitespace-nowrap px-2">
+              {item.label}
+            </span>
+          </a>
+        ))}
+      </nav>
+
+      {/* Desktop Navigation */}
+      <nav
+        className="z-50 relative h-32 overflow-hidden hidden sm:block"
         aria-label="Main navigation"
         style={{ clipPath: "url(#header-bottom-wave)" }}
       >
@@ -102,12 +147,12 @@ export default function SiteHeader() {
         ))}
       </nav>
       <div
-        className="animate-wave-breathe-x fixed w-screen top-1 left-0 right-0 h-32 bg-(--periwinkle) opacity-33 overflow-hidden"
+        className="animate-wave-breathe-x fixed w-screen top-1 left-0 right-0 h-32 bg-(--periwinkle) opacity-33 overflow-hidden hidden sm:block"
         aria-label="Main navigation"
         style={{ clipPath: "url(#header-bottom-wave)" }}
       />
       <div
-        className="animate-wave-breathe-x-delay5s fixed w-screen top-2 left-0 right-0 h-32 bg-(--periwinkle) opacity-33 overflow-hidden"
+        className="animate-wave-breathe-x-delay5s fixed w-screen top-2 left-0 right-0 h-32 bg-(--periwinkle) opacity-33 overflow-hidden hidden sm:block"
         aria-label="Main navigation"
         style={{ clipPath: "url(#header-bottom-wave)" }}
       />
