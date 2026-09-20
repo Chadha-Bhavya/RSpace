@@ -99,7 +99,8 @@ class PostgresMemoryStore:
         if not database_url:
             raise ValueError("DATABASE_URL is required for PostgreSQL storage.")
         self.database_url = database_url
-        self._initialize_schema()
+        self._initialized = False
+        self._schema_lock = threading.Lock()
 
     @staticmethod
     def safe_user_id(user_id: str) -> str:
@@ -126,40 +127,47 @@ class PostgresMemoryStore:
         text = str(value).strip().strip("[]")
         return [float(item) for item in text.split(",") if item]
 
-    def _initialize_schema(self) -> None:
-        with self._connect() as connection, connection.cursor() as cursor:
-            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions")
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS memory_events (
-                    event_id text PRIMARY KEY,
-                    user_id text NOT NULL,
-                    created_at timestamptz NOT NULL,
-                    kind text NOT NULL,
-                    value text NOT NULL,
-                    confidence double precision NOT NULL,
-                    evidence text NOT NULL,
-                    attributes jsonb NOT NULL DEFAULT '{}'::jsonb,
-                    embedding extensions.vector(384),
-                    embedding_backend text NOT NULL DEFAULT ''
+    def _ensure_schema(self) -> None:
+        if self._initialized:
+            return
+        with self._schema_lock:
+            if self._initialized:
+                return
+            with self._connect() as connection, connection.cursor() as cursor:
+                cursor.execute("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions")
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS memory_events (
+                        event_id text PRIMARY KEY,
+                        user_id text NOT NULL,
+                        created_at timestamptz NOT NULL,
+                        kind text NOT NULL,
+                        value text NOT NULL,
+                        confidence double precision NOT NULL,
+                        evidence text NOT NULL,
+                        attributes jsonb NOT NULL DEFAULT '{}'::jsonb,
+                        embedding extensions.vector(384),
+                        embedding_backend text NOT NULL DEFAULT ''
+                    )
+                    """
                 )
-                """
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS memory_events_user_created_idx "
-                "ON memory_events (user_id, created_at DESC)"
-            )
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS user_profiles (
-                    user_id text PRIMARY KEY,
-                    profile jsonb NOT NULL,
-                    updated_at timestamptz NOT NULL DEFAULT now()
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS memory_events_user_created_idx "
+                    "ON memory_events (user_id, created_at DESC)"
                 )
-                """
-            )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS user_profiles (
+                        user_id text PRIMARY KEY,
+                        profile jsonb NOT NULL,
+                        updated_at timestamptz NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            self._initialized = True
 
     def load_events(self, user_id: str) -> list[MemoryEvent]:
+        self._ensure_schema()
         user_id = self.safe_user_id(user_id)
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -192,6 +200,7 @@ class PostgresMemoryStore:
     def append_events(self, user_id: str, events: list[MemoryEvent]) -> None:
         if not events:
             return
+        self._ensure_schema()
         from psycopg.types.json import Jsonb
 
         user_id = self.safe_user_id(user_id)
@@ -220,6 +229,7 @@ class PostgresMemoryStore:
                 )
 
     def save_profile(self, user_id: str, profile: dict[str, Any]) -> None:
+        self._ensure_schema()
         from psycopg.types.json import Jsonb
 
         user_id = self.safe_user_id(user_id)
@@ -235,6 +245,7 @@ class PostgresMemoryStore:
             )
 
     def load_profile(self, user_id: str) -> dict[str, Any]:
+        self._ensure_schema()
         user_id = self.safe_user_id(user_id)
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute("SELECT profile FROM user_profiles WHERE user_id = %s", (user_id,))
