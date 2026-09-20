@@ -23,10 +23,15 @@ The API keys stay on the server. `POST /api/transcribe` accepts a multipart
 `audio` file and returns `{"transcript": "..."}`. `POST /api/speak` accepts
 `{"text": "..."}` and returns MP3 audio.
 
-`POST /api/companion` accepts `{"text": "..."}` and returns `{"reply": "..."}`.
-The temporary OpenAI provider lives entirely in `companion.py`, behind the
-`ReplyProvider` interface. Replace `create_reply_provider` with the team’s
-future reply service without changing browser, Deepgram, or ElevenLabs code.
+`POST /api/companion` accepts `{"user_id": "demo_user", "text": "..."}` and
+returns `{"reply": "..."}`. Before generating the reply, it loads a compact
+profile and up to five relevant memories. The response rules use respectful
+adult language, avoid elderspeak, follow the user's topic, and ask at most one
+question. If memory retrieval fails, conversation continues without memory.
+
+The OpenAI provider lives entirely in `companion.py`, behind the
+`ReplyProvider` interface. The current message and compact private context are
+sent with `store: false`. Deepgram and ElevenLabs remain independent.
 
 ## Memory engine
 

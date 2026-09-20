@@ -44,6 +44,7 @@
       const transcriptElement = document.querySelector('#transcript');
       const replyElement = document.querySelector('#reply');
       const audio = document.querySelector('#audio');
+      const userId = 'demo_user';
 
       let active = false;
       let stream;
@@ -162,6 +163,7 @@
             return resumeSoon();
           }
           form.append('audio', recording, `conversation.${extension}`);
+          form.append('user_id', userId);
           const transcription = await requestJson('/api/transcribe', { method: 'POST', body: form });
 
           if (!transcription.transcript) {
@@ -177,7 +179,7 @@
           const companion = await requestJson('/api/companion', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: transcription.transcript })
+            body: JSON.stringify({ user_id: userId, text: transcription.transcript })
           });
           replyElement.textContent = companion.reply;
           setStatus('Here’s what I’m thinking…');

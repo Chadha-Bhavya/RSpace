@@ -16,8 +16,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from companion import create_reply_provider
+from companion import create_reply_provider, retrieve_companion_context
 from memory_engine import MemoryEngine
+from memory_engine.filters import filter_text
 
 load_dotenv()
 
@@ -50,6 +51,7 @@ class SpeakRequest(BaseModel):
 
 
 class CompanionRequest(BaseModel):
+    user_id: str = Field(default="demo_user", min_length=1, max_length=80)
     text: str = Field(min_length=1, max_length=2_000, examples=["I have been feeling lonely lately."])
 
 
@@ -144,9 +146,18 @@ async def speak(request: SpeakRequest) -> Response:
 
 @app.post("/api/companion")
 async def companion(request: CompanionRequest) -> dict[str, str]:
-    """Generate a caring reply; this is deliberately separate from speech I/O."""
+    """Generate a respectful, memory-informed reply separate from speech I/O."""
     try:
-        reply = await create_reply_provider(app.state.http).reply(request.text.strip())
+        user_text = request.text.strip()
+        filtered = filter_text(user_text)
+        context = await asyncio.to_thread(
+            retrieve_companion_context,
+            app.state.memory,
+            request.user_id,
+            user_text,
+            filtered.safety_flags,
+        )
+        reply = await create_reply_provider(app.state.http).reply(user_text, context)
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except httpx.HTTPStatusError as error:
