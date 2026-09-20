@@ -17,7 +17,7 @@ import httpx
 from memory_engine.embeddings import Embedder, cosine_similarity
 
 MATCH_THRESHOLD = 0.72
-MIN_SHARED_INTERESTS = 2
+MIN_SHARED_INTERESTS = 1
 MIN_LEARNING_DECISIONS = 5
 MODEL_FEATURES = 4
 ACTIVE_WINDOW = timedelta(days=90)
@@ -650,9 +650,9 @@ class MatchingEngine:
             features = self._features(current, other, shared)
             reciprocal_rank = math.sqrt(ranks[(user_id, other_id)] * ranks[(other_id, user_id)])
             rank_strength = 1.0 / reciprocal_rank
-            # Two independently shared interests are strong cold-start evidence.
-            # This saturating curve avoids fixed category weights while keeping
-            # one broad similarity from being mistaken for a match.
+            # Shared interests are strong cold-start evidence. The saturating
+            # curve rewards additional overlap while still allowing a single
+            # strong shared interest to produce a match.
             shared_evidence = 1.0 - math.exp(-len(shared))
             match_quality = max(semantic, shared_evidence)
             cold_score = math.sqrt(match_quality * rank_strength)

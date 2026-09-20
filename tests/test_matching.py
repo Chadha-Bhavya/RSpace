@@ -142,6 +142,26 @@ class TestMatchingEngine(unittest.TestCase):
         self.assertNotIn("email", matches[0])
         self.assertEqual(matches[0]["why"], "You both mentioned jazz and gardening.")
 
+    def test_cold_start_allows_one_shared_interest(self):
+        accounts = [
+            {"user_id": "franklin", "display_name": "Franklin", "email": "franklin@example.com"},
+            {"user_id": "d", "display_name": "Dana", "email": "dana@example.com"},
+        ]
+        profiles = {
+            "franklin": profile("basketball", "football"),
+            "d": profile("basketball", "gardening"),
+        }
+        repository = JsonMatchingRepository(Path(self.temp.name) / "one-shared-interest")
+        engine = MatchingEngine(
+            FakeMemory(accounts, profiles), repository, HashingEmbedder(), FakeSemanticEmbedder()
+        )
+
+        matches = engine.find_matches("franklin")
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["name"], "Dana")
+        self.assertEqual(matches[0]["shared_interests"], ["basketball"])
+
     def test_semantically_matches_real_world_interest_phrasing(self):
         accounts = [
             {"user_id": "x", "display_name": "X", "email": "x@example.com"},
