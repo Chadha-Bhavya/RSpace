@@ -335,6 +335,10 @@
           if (!speechResponse.ok) {
             setStatus('Speaking with the device voice…');
             await speakWithDeviceVoice(companion.reply);
+            if (companion.end_conversation) {
+              stopConversation();
+              return;
+            }
             if (active) startListeningTurn();
             return;
           }
@@ -347,6 +351,10 @@
             audio.addEventListener('ended', resolve, { once: true });
             audio.addEventListener('error', resolve, { once: true });
           });
+          if (companion.end_conversation) {
+            stopConversation();
+            return;
+          }
           if (active) startListeningTurn();
         } catch (error) {
           setStatus(error.message || 'Something went wrong. I’ll listen again in a moment.');

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from auth import AuthError, create_auth_client
-from companion import create_reply_provider, retrieve_companion_context
+from companion import create_reply_provider, detect_end_conversation, retrieve_companion_context
 from memory_engine import MemoryEngine
 from memory_engine.filters import filter_text
 from matching import create_matching_engine
@@ -324,9 +324,11 @@ async def speak(request: SpeakRequest, user: dict = Depends(require_user)) -> Re
 
 
 @app.post("/api/companion")
-async def companion(request: CompanionRequest, user: dict = Depends(require_user)) -> dict[str, str]:
+async def companion(request: CompanionRequest, user: dict = Depends(require_user)) -> dict[str, object]:
     try:
         user_text = request.text.strip()
+        if detect_end_conversation(user_text):
+            return {"reply": "Of course. Goodbye for now.", "end_conversation": True}
         filtered = filter_text(user_text)
         context = await asyncio.to_thread(
             retrieve_companion_context,
@@ -342,7 +344,7 @@ async def companion(request: CompanionRequest, user: dict = Depends(require_user
         raise upstream_error("The companion", error.response) from error
     except (httpx.RequestError, ValueError):
         raise HTTPException(status_code=502, detail="The companion could not prepare a reply. Please try again.")
-    return {"reply": reply}
+    return {"reply": reply, "end_conversation": False}
 
 
 @app.post("/api/memory/process")

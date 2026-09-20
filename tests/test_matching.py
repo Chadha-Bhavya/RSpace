@@ -140,6 +140,7 @@ class TestMatchingEngine(unittest.TestCase):
         self.assertEqual(matches[0]["shared_interests"], ["jazz", "gardening"])
         self.assertGreaterEqual(matches[0]["score"], 72)
         self.assertNotIn("email", matches[0])
+        self.assertEqual(matches[0]["why"], "You both mentioned jazz and gardening.")
 
     def test_semantically_matches_real_world_interest_phrasing(self):
         accounts = [

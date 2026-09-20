@@ -692,9 +692,10 @@ class MatchingEngine:
 
     @staticmethod
     def _reason(shared: list[str]) -> str:
-        if len(shared) == 2:
-            return f"You both enjoy {shared[0]} and {shared[1]}."
-        return "You both enjoy " + ", ".join(shared[:-1]) + f", and {shared[-1]}."
+        concise = shared[:2]
+        if len(concise) == 1:
+            return f"You both mentioned {concise[0]}."
+        return f"You both mentioned {concise[0]} and {concise[1]}."
 
     def decide(self, user_id: str, match_id: str, decision: str) -> dict[str, Any]:
         if decision not in {"accept", "pass", "block"}:

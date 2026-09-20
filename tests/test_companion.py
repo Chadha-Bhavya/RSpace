@@ -6,6 +6,7 @@ from companion import (
     CompanionContext,
     OpenAIReplyProvider,
     build_companion_context,
+    detect_end_conversation,
     retrieve_companion_context,
 )
 
@@ -42,15 +43,22 @@ class TestCompanionContext(unittest.TestCase):
             "important_relationships": [{"relationship": "daughter"}],
             "communication_preferences": ["short answers"],
             "top_themes": [{"theme": "roses"}],
-            "recent_memories": [{"summary": "not included wholesale"}],
+            "event_count": 22,
+            "recent_memories": [
+                {"summary": "Planted roses", "timestamp": "2026-09-18", "confidence": 0.9},
+                {"summary": "Plans to call Sam", "timestamp": "2026-09-17", "confidence": 0.8},
+                {"summary": "not included", "timestamp": "2026-09-16", "confidence": 0.7},
+            ],
         }
         results = [
             {"event": {"kind": "interest", "value": f"topic {index}", "evidence": "evidence", "confidence": 0.9}}
             for index in range(7)
         ]
         context = build_companion_context(profile, results, ["medical_emergency"])
-        self.assertEqual(len(context.relevant_memories), 5)
+        self.assertEqual(len(context.relevant_memories), 6)
         self.assertNotIn("recent_memories", context.profile)
+        self.assertEqual(len(context.recent_continuity), 2)
+        self.assertEqual(context.familiarity, "established")
         self.assertEqual(context.safety_flags, ["medical_emergency"])
 
     def test_zero_score_memory_is_not_included(self):
@@ -69,6 +77,14 @@ class TestCompanionContext(unittest.TestCase):
         self.assertIn("how are we feeling", lowered)
         self.assertIn("never diagnose", lowered)
         self.assertIn("emergency services", lowered)
+        self.assertIn("unfinished plan", lowered)
+
+    def test_end_conversation_intent_is_detected_without_false_negation(self):
+        self.assertTrue(detect_end_conversation("Please end the conversation with me right now."))
+        self.assertTrue(detect_end_conversation("That's all for now, bye."))
+        self.assertTrue(detect_end_conversation("Leave me alone."))
+        self.assertFalse(detect_end_conversation("I don't want to stop talking."))
+        self.assertFalse(detect_end_conversation("Don't end the conversation."))
 
 
 class TestOpenAIReplyProvider(unittest.IsolatedAsyncioTestCase):
