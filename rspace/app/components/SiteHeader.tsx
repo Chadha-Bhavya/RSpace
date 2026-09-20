@@ -140,7 +140,7 @@ export default function SiteHeader() {
                 style={{ clipPath: `url(#${clipPath})` }}
               />
             ))}
-            <span className="relative z-10 whitespace-nowrap -translate-y-2 px-3">
+            <span className="relative z-10 whitespace-nowrap -translate-y-4 px-3">
               {item.label}
             </span>
           </a>
