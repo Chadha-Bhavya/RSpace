@@ -139,6 +139,37 @@ class TestMemoryPipeline(unittest.TestCase):
         self.assertEqual(second["previous_session"]["turn_count"], 1)
         self.assertEqual(second["current_session"]["timezone"], "America/New_York")
 
+    def test_conversation_turns_persist_for_follow_ups(self):
+        session = self.engine.start_conversation("alice", "America/New_York")
+        session_id = session["current_session"]["session_id"]
+
+        self.engine.save_conversation_turns(
+            "alice",
+            session_id,
+            "I repaired my father's radio.",
+            "That sounds meaningful. Did it still work?",
+        )
+
+        context = self.engine.conversation_context("alice", session_id)
+        self.assertEqual([turn["role"] for turn in context["recent_turns"]], ["user", "assistant"])
+        self.assertIn("father's radio", context["recent_turns"][0]["content"])
+        self.assertEqual(context["current_session"]["turn_count"], 1)
+
+    def test_conversation_turns_redact_direct_identifiers(self):
+        session = self.engine.start_conversation("alice", "UTC")
+        session_id = session["current_session"]["session_id"]
+
+        self.engine.save_conversation_turns(
+            "alice",
+            session_id,
+            "Email me at alice@example.com about the radio.",
+            "I can continue discussing the radio here.",
+        )
+
+        context = self.engine.conversation_context("alice", session_id)
+        self.assertNotIn("alice@example.com", str(context["recent_turns"]))
+        self.assertIn("[REDACTED_EMAIL]", context["recent_turns"][0]["content"])
+
     def test_important_date_is_valid_memory(self):
         text = "Maya's birthday is June 12."
         drafts = validate_drafts(text, drafts_from_payload({"memories": [{

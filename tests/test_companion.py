@@ -86,6 +86,19 @@ class TestCompanionContext(unittest.TestCase):
         self.assertEqual(context.familiarity, "established")
         self.assertEqual(context.safety_flags, ["medical_emergency"])
 
+    def test_recent_turns_are_included_for_follow_up_context(self):
+        context = build_companion_context(
+            {},
+            [],
+            session_context={"recent_turns": [
+                {"role": "user", "content": "I repaired my father's radio."},
+                {"role": "assistant", "content": "That sounds meaningful. Did it still work?"},
+            ]},
+        )
+
+        self.assertEqual(context.recent_turns[-1]["role"], "assistant")
+        self.assertIn("still work", context.recent_turns[-1]["content"])
+
     def test_zero_score_memory_is_not_included(self):
         results = [{"score": 0, "event": {"kind": "interest", "value": "unrelated"}}]
         context = build_companion_context({}, results)
@@ -158,7 +171,7 @@ class TestOpenAIReplyProvider(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(parts, ["That sounds ", "meaningful."])
         self.assertTrue(client.request["json"]["stream"])
-        self.assertEqual(client.request["json"]["max_output_tokens"], 180)
+        self.assertEqual(client.request["json"]["max_output_tokens"], 100)
 
 
 if __name__ == "__main__":

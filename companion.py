@@ -8,6 +8,7 @@ model for each turn.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -18,6 +19,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 
+logger = logging.getLogger(__name__)
+
+
 COMPANION_INSTRUCTIONS = """You are RSpace, a patient conversation companion for an older adult.
 
 Respectful communication rules:
@@ -26,7 +30,7 @@ Respectful communication rules:
 - Never use pet names such as "dear", "sweetie", "honey", or "young lady" unless the user explicitly asks for one.
 - Never use patronizing collective phrasing such as "How are we feeling?"
 - Use plain English and clear sentences, but do not oversimplify or talk down to the user.
-- Usually respond in one to three short sentences.
+- Usually respond in one or two short sentences and no more than 50 words.
 - Listen before advising. Acknowledge one specific feeling, detail, or story the user shared.
 - Follow the user's topic, including life stories and tangents. Do not redirect without a good reason.
 - Ask at most one easy, open-ended follow-up question when it would help the user continue.
@@ -41,6 +45,11 @@ Memory rules:
 - Never mention a memory merely to prove that you remember it.
 - Never invent a fact or treat an uncertain memory as certain.
 - If the user's current statement conflicts with a memory, trust the current statement.
+
+Conversation continuity rules:
+- Recent conversation turns are chronological and are the primary reference for follow-up questions.
+- Resolve words such as "it", "that", "they", and "what I said" from the recent turns when possible.
+- Do not repeat a question the user already answered in the recent turns.
 
 Conversation timeline rules:
 - Use the supplied timing context to understand whether this is a quick return, a continuation later that day,
@@ -102,6 +111,7 @@ class CompanionContext:
     safety_flags: list[str] = field(default_factory=list)
     timeline: dict[str, Any] = field(default_factory=dict)
     human_connections: list[str] = field(default_factory=list)
+    recent_turns: list[dict[str, str]] = field(default_factory=list)
 
     def as_json(self) -> str:
         return json.dumps(
@@ -113,6 +123,7 @@ class CompanionContext:
                 "safety_flags": self.safety_flags,
                 "timeline": self.timeline,
                 "human_connections": self.human_connections,
+                "recent_turns": self.recent_turns,
             },
             ensure_ascii=False,
         )
@@ -180,6 +191,13 @@ def build_companion_context(
     event_count = int(source.get("event_count") or 0)
     familiarity = "established" if event_count >= 20 else "developing" if event_count >= 5 else "new"
 
+    recent_turns = []
+    for item in (session_context or {}).get("recent_turns", [])[-6:]:
+        role = str(item.get("role") or "")
+        content = " ".join(str(item.get("content") or "").split())[:600]
+        if role in {"user", "assistant"} and content:
+            recent_turns.append({"role": role, "content": content})
+
     return CompanionContext(
         profile=compact_profile,
         relevant_memories=memories,
@@ -188,6 +206,7 @@ def build_companion_context(
         safety_flags=list(safety_flags or []),
         timeline=build_timeline_context(source, session_context or {}, first_turn),
         human_connections=list(dict.fromkeys(human_connections or []))[:5],
+        recent_turns=recent_turns,
     )
 
 
@@ -284,10 +303,12 @@ def retrieve_companion_context(
     try:
         profile = memory.profile(user_id)
     except Exception:
+        logger.warning("Unable to load memory profile for user_id=%s", user_id, exc_info=True)
         profile = {}
     try:
         results = memory.search(user_id, user_text, limit=6)
     except Exception:
+        logger.warning("Unable to search memories for user_id=%s", user_id, exc_info=True)
         results = []
     return build_companion_context(
         profile,
@@ -350,7 +371,7 @@ class OpenAIReplyProvider:
             "instructions": COMPANION_INSTRUCTIONS,
             "input": prompt,
             "reasoning": {"effort": "minimal"},
-            "max_output_tokens": 180,
+            "max_output_tokens": 100,
             "store": False,
             "stream": stream,
         }

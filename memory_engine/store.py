@@ -35,6 +35,10 @@ class MemoryStore(Protocol):
 
     def conversation_context(self, user_id: str, session_id: str) -> dict[str, Any]: ...
 
+    def save_conversation_turns(
+        self, user_id: str, session_id: str, turns: list[dict[str, str]]
+    ) -> None: ...
+
     def touch_conversation(self, user_id: str, session_id: str) -> None: ...
 
     def end_conversation(self, user_id: str, session_id: str) -> None: ...
@@ -177,6 +181,7 @@ class JsonlMemoryStore:
             "last_turn_at": None,
             "turn_count": 0,
             "timezone": timezone_name,
+            "turns": [],
         }
         with self._lock:
             sessions = self._load_sessions(user_id)
@@ -195,7 +200,47 @@ class JsonlMemoryStore:
             if item.get("session_id") != session_id and item.get("started_at") < current.get("started_at", "")
         ]
         previous = max(earlier, key=lambda item: item.get("started_at", ""), default=None)
-        return {"current_session": current, "previous_session": previous}
+        recent_turns: list[dict[str, str]] = []
+        for session in sessions:
+            for turn in session.get("turns", []):
+                if turn.get("role") in {"user", "assistant"} and turn.get("content"):
+                    recent_turns.append({
+                        "role": str(turn["role"]),
+                        "content": str(turn["content"]),
+                        "created_at": str(turn.get("created_at") or ""),
+                    })
+        recent_turns.sort(key=lambda item: item["created_at"])
+        return {
+            "current_session": current,
+            "previous_session": previous,
+            "recent_turns": recent_turns[-6:],
+        }
+
+    def save_conversation_turns(
+        self, user_id: str, session_id: str, turns: list[dict[str, str]]
+    ) -> None:
+        user_id = self.safe_user_id(user_id)
+        now = datetime.now(timezone.utc).isoformat()
+        cleaned = [
+            {
+                "role": str(turn.get("role") or ""),
+                "content": str(turn.get("content") or "").strip()[:2_000],
+                "created_at": now,
+            }
+            for turn in turns
+            if turn.get("role") in {"user", "assistant"} and str(turn.get("content") or "").strip()
+        ]
+        if not cleaned:
+            return
+        with self._lock:
+            sessions = self._load_sessions(user_id)
+            for session in sessions:
+                if session.get("session_id") == session_id:
+                    session["turns"] = (list(session.get("turns") or []) + cleaned)[-20:]
+                    session["turn_count"] = int(session.get("turn_count") or 0) + 1
+                    session["last_turn_at"] = now
+                    break
+            self._save_sessions(user_id, sessions)
 
     def touch_conversation(self, user_id: str, session_id: str) -> None:
         user_id = self.safe_user_id(user_id)
@@ -316,13 +361,30 @@ class PostgresMemoryStore:
                     """
                 )
                 cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS conversation_turns (
+                        turn_id text PRIMARY KEY,
+                        session_id text NOT NULL,
+                        user_id text NOT NULL,
+                        role text NOT NULL CHECK (role IN ('user', 'assistant')),
+                        content text NOT NULL,
+                        created_at timestamptz NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+                cursor.execute(
                     "CREATE INDEX IF NOT EXISTS conversation_sessions_user_started_idx "
                     "ON conversation_sessions (user_id, started_at DESC)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS conversation_turns_user_created_idx "
+                    "ON conversation_turns (user_id, created_at DESC)"
                 )
                 cursor.execute("ALTER TABLE memory_events ENABLE ROW LEVEL SECURITY")
                 cursor.execute("ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY")
                 cursor.execute("ALTER TABLE account_profiles ENABLE ROW LEVEL SECURITY")
                 cursor.execute("ALTER TABLE conversation_sessions ENABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE conversation_turns ENABLE ROW LEVEL SECURITY")
             self._initialized = True
 
     def load_events(self, user_id: str) -> list[MemoryEvent]:
@@ -514,10 +576,47 @@ class PostgresMemoryStore:
                 (user_id, session_id, current_row[2]),
             )
             previous_row = cursor.fetchone()
+            cursor.execute(
+                "SELECT role, content, created_at FROM conversation_turns "
+                "WHERE user_id = %s ORDER BY created_at DESC LIMIT 6",
+                (user_id,),
+            )
+            turn_rows = list(reversed(cursor.fetchall()))
         return {
             "current_session": self._session_row(current_row),
             "previous_session": self._session_row(previous_row),
+            "recent_turns": [
+                {"role": row[0], "content": row[1], "created_at": row[2].isoformat()}
+                for row in turn_rows
+            ],
         }
+
+    def save_conversation_turns(
+        self, user_id: str, session_id: str, turns: list[dict[str, str]]
+    ) -> None:
+        self._ensure_schema()
+        user_id = self.safe_user_id(user_id)
+        cleaned = [
+            (str(turn.get("role") or ""), str(turn.get("content") or "").strip()[:2_000])
+            for turn in turns
+            if turn.get("role") in {"user", "assistant"} and str(turn.get("content") or "").strip()
+        ]
+        if not cleaned:
+            return
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE conversation_sessions SET turn_count = turn_count + 1, last_turn_at = now() "
+                "WHERE user_id = %s AND session_id = %s",
+                (user_id, session_id),
+            )
+            if cursor.rowcount != 1:
+                return
+            for role, content in cleaned:
+                cursor.execute(
+                    "INSERT INTO conversation_turns (turn_id, session_id, user_id, role, content) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (uuid.uuid4().hex, session_id, user_id, role, content),
+                )
 
     def touch_conversation(self, user_id: str, session_id: str) -> None:
         self._ensure_schema()

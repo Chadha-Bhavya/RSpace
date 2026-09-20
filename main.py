@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,6 +22,9 @@ from memory_engine import MemoryEngine
 from memory_engine.filters import filter_text
 from matching import create_matching_engine
 from realtime import SentenceChunker
+
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -469,10 +473,11 @@ async def companion(request: CompanionRequest, user: dict = Depends(require_user
         )
         reply = await create_reply_provider(app.state.http).reply(user_text, context)
         if request.session_id:
-            await asyncio.to_thread(
-                app.state.memory.touch_conversation,
+            await persist_conversation_turns(
                 str(user["id"]),
                 request.session_id,
+                user_text,
+                reply,
             )
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
@@ -547,7 +552,26 @@ async def persist_conversation_memory(user_id: str, text: str) -> None:
         await asyncio.to_thread(app.state.memory.process, user_id, text)
         await asyncio.to_thread(app.state.matching.refresh_profiles)
     except Exception:
-        pass
+        logger.exception("Unable to persist long-term memory for user_id=%s", user_id)
+
+
+async def persist_conversation_turns(
+    user_id: str, session_id: str, user_text: str, assistant_text: str
+) -> None:
+    try:
+        await asyncio.to_thread(
+            app.state.memory.save_conversation_turns,
+            user_id,
+            session_id,
+            user_text,
+            assistant_text,
+        )
+    except Exception:
+        logger.exception(
+            "Unable to persist recent conversation turns for user_id=%s session_id=%s",
+            user_id,
+            session_id,
+        )
 
 
 @app.websocket("/ws/respond")
@@ -658,7 +682,12 @@ async def respond_stream(websocket: WebSocket) -> None:
             if ending:
                 await asyncio.to_thread(app.state.memory.end_conversation, str(user["id"]), session_id)
             else:
-                await asyncio.to_thread(app.state.memory.touch_conversation, str(user["id"]), session_id)
+                await persist_conversation_turns(
+                    str(user["id"]),
+                    session_id,
+                    user_text,
+                    "".join(reply_parts).strip(),
+                )
         if memory_task:
             await memory_task
     except Exception:

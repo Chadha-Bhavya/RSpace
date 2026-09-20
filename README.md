@@ -98,8 +98,10 @@ Run local tests with `python3 -m unittest discover -s tests -v`.
 
 Starting a browser conversation creates a private `conversation_sessions` row
 with the user's browser timezone. The app records start, end, last-turn time,
-and turn count, then gives the companion a compact description of the gap since
-the prior conversation. The model uses this across the session to distinguish
+and turn count. It also keeps the six most recent redacted user and assistant
+turns so immediate follow-up questions retain their context without sending a
+large transcript to the reply model. The companion receives a compact description
+of the gap since the prior conversation and uses it to distinguish
 a quick return from reconnecting after days or weeks, without guilt-inducing or
 surveillance-like language. Saved birthdays and anniversaries that match the
 user's local date may be mentioned gently when relevant.

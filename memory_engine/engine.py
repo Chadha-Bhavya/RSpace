@@ -130,6 +130,17 @@ class MemoryEngine:
         user_id = self.store.safe_user_id(user_id)
         return self.store.conversation_context(user_id, session_id)
 
+    def save_conversation_turns(
+        self, user_id: str, session_id: str, user_text: str, assistant_text: str
+    ) -> None:
+        user_id = self.store.safe_user_id(user_id)
+        safe_user_text = filter_text(user_text).redacted_text
+        safe_assistant_text = filter_text(assistant_text).redacted_text
+        self.store.save_conversation_turns(user_id, session_id, [
+            {"role": "user", "content": safe_user_text},
+            {"role": "assistant", "content": safe_assistant_text},
+        ])
+
     def touch_conversation(self, user_id: str, session_id: str) -> None:
         user_id = self.store.safe_user_id(user_id)
         self.store.touch_conversation(user_id, session_id)
