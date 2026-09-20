@@ -6,6 +6,9 @@ import BackgroundSquares from "./components/BackgroundSquares";
 export const metadata: Metadata = {
   title: "RSpace | Connect with others easily",
   description: "A friendly social space for older adults.",
+  icons: {
+    icon: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
