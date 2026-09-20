@@ -23,6 +23,10 @@ MODEL_FEATURES = 4
 ACTIVE_WINDOW = timedelta(days=90)
 INTEREST_SIMILARITY_THRESHOLD = 0.62
 EMBEDDING_DIMENSIONS = 384
+DEMO_MATCH_TARGET_EMAIL_HASH = "a7d39dee6e0ce9f78e1ff85de04321d4a12a43e6973c02fc998d4095bde9f1d4"
+DEMO_MATCH_USER_ID = "rspace-demo-friend"
+DEMO_MATCH_EMAIL = "demo.friend@rspace.app"
+DEMO_MATCH_NAME = "RSpace Demo Friend"
 SENSITIVE_MATCH_PATTERN = re.compile(
     r"\b(?:lonel(?:y|iness)|depress(?:ion|ed)?|anxi(?:ety|ous)|dementia|alzheimer(?:'s)?|"
     r"suicid(?:e|al)?|self[- ]harm|cancer|diabet(?:es|ic)|diagnos\w*|disease|disorder|"
@@ -616,11 +620,64 @@ class MatchingEngine:
                 weights[index] += 0.12 * ((label - prediction) * feature - 0.002 * weights[index])
         self.repository.save_model(user_id, weights, int(model.get("decision_count", 0)) + 1)
 
+    def _ensure_demo_request(self, user_id: str, profiles: dict[str, MatchProfile]) -> None:
+        """Create one idempotent, pre-accepted demo request for the hackathon account."""
+        account = self.memory.store.load_account_profile(user_id)
+        email_hash = hashlib.sha256(str(account.get("email") or "").lower().encode()).hexdigest()
+        if email_hash != DEMO_MATCH_TARGET_EMAIL_HASH:
+            return
+        target = profiles.get(user_id)
+        if not target:
+            return
+
+        interest = target.interests[0] if target.interests else "friendly conversation"
+        vector = target.interest_embeddings.get(interest) or self.local_interest_embedder.embed_many([interest])[interest]
+        demo = MatchProfile(
+            user_id=DEMO_MATCH_USER_ID,
+            display_name=DEMO_MATCH_NAME,
+            interests=[interest],
+            communication_preferences=[],
+            interest_embeddings={interest: vector},
+            embedding=vector,
+            embedding_backend=self.local_interest_embedder.name,
+            last_active_at=_now(),
+        )
+        self.memory.store.save_account_profile(
+            DEMO_MATCH_USER_ID, DEMO_MATCH_EMAIL, DEMO_MATCH_NAME
+        )
+        self.repository.save_profile(demo)
+        profiles[DEMO_MATCH_USER_ID] = demo
+
+        first, second = sorted((user_id, DEMO_MATCH_USER_ID))
+        match_id = _pair_id(first, second)
+        existing = self.repository.get_match(match_id)
+        if existing and existing.get("status") != "pending":
+            return
+
+        target_features = self._features(target, demo, [interest])
+        demo_features = self._features(demo, target, [interest])
+        self.repository.save_match({
+            "match_id": match_id,
+            "user_a": first,
+            "user_b": second,
+            "score": 0.93,
+            "reasons": [interest],
+            "features": {user_id: target_features, DEMO_MATCH_USER_ID: demo_features},
+            "status": "pending",
+            "decisions": {},
+            "created_at": _now(),
+            "updated_at": _now(),
+        })
+        current = self.repository.get_match(match_id)
+        if current.get("decisions", {}).get(DEMO_MATCH_USER_ID) != "accept":
+            self.repository.save_decision(match_id, DEMO_MATCH_USER_ID, "accept")
+
     def find_matches(self, user_id: str) -> list[dict[str, Any]]:
         self.refresh_profiles()
         profiles = {profile.user_id: profile for profile in self.repository.list_profiles()}
         if user_id not in profiles:
             return []
+        self._ensure_demo_request(user_id, profiles)
         current = profiles[user_id]
         pair_data: dict[tuple[str, str], tuple[list[str], float]] = {}
         neighbors: dict[str, list[tuple[str, float]]] = {profile_id: [] for profile_id in profiles}
