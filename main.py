@@ -1,13 +1,16 @@
 """FastAPI voice companion with Supabase authentication and private memory."""
 
 import asyncio
+import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
+import websockets
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
@@ -17,11 +20,14 @@ from companion import create_reply_provider, detect_end_conversation, retrieve_c
 from memory_engine import MemoryEngine
 from memory_engine.filters import filter_text
 from matching import create_matching_engine
+from realtime import SentenceChunker
 
 load_dotenv()
 
 DEEPGRAM_LISTEN_URL = "https://api.deepgram.com/v1/listen"
+DEEPGRAM_STREAM_URL = "wss://api.deepgram.com/v1/listen"
 ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
+ELEVENLABS_TTS_STREAM_URL = "wss://api.elevenlabs.io/v1/text-to-speech"
 STATIC_DIR = Path(__file__).parent / "static"
 DATA_DIR = Path(os.getenv("RSPACE_DATA_DIR", Path(__file__).parent / "data"))
 ACCESS_COOKIE = "rspace_access_token"
@@ -140,6 +146,18 @@ async def require_user(request: Request) -> dict:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except httpx.RequestError as error:
         raise HTTPException(status_code=502, detail="Authentication is temporarily unavailable.") from error
+
+
+async def require_websocket_user(websocket: WebSocket) -> dict | None:
+    access_token = websocket.cookies.get(ACCESS_COOKIE)
+    if not access_token:
+        await websocket.close(code=4401, reason="Please log in to continue.")
+        return None
+    try:
+        return await create_auth_client(websocket.app.state.http).get_user(access_token)
+    except (AuthError, RuntimeError, httpx.RequestError):
+        await websocket.close(code=4401, reason="Your session is unavailable.")
+        return None
 
 
 @app.get("/health")
@@ -299,6 +317,95 @@ async def transcribe(
     return {"transcript": transcript, "memory": memory}
 
 
+@app.websocket("/ws/transcribe")
+async def transcribe_stream(websocket: WebSocket) -> None:
+    """Relay microphone chunks to Deepgram and return one finalized utterance."""
+    user = await require_websocket_user(websocket)
+    if not user:
+        return
+    await websocket.accept()
+    try:
+        api_key = os.getenv("DEEPGRAM_API_KEY")
+        if not api_key or api_key.startswith("your_"):
+            await websocket.send_json({"type": "error", "message": "Deepgram is not configured."})
+            return
+        params = urlencode({
+            "model": "nova-3",
+            "language": "en-US",
+            "smart_format": "true",
+            "punctuate": "true",
+            "interim_results": "true",
+            "vad_events": "true",
+            "endpointing": "500",
+            "utterance_end_ms": "1200",
+        })
+        transcript_parts: list[str] = []
+        browser_finished = asyncio.Event()
+
+        async with websockets.connect(
+            f"{DEEPGRAM_STREAM_URL}?{params}",
+            extra_headers={"Authorization": f"Token {api_key}"},
+            max_size=None,
+            ping_interval=20,
+        ) as deepgram:
+            async def forward_audio() -> None:
+                try:
+                    while True:
+                        message = await websocket.receive()
+                        if message["type"] == "websocket.disconnect":
+                            browser_finished.set()
+                            await deepgram.send(json.dumps({"type": "CloseStream"}))
+                            return
+                        if message.get("bytes"):
+                            await deepgram.send(message["bytes"])
+                        elif message.get("text"):
+                            command = json.loads(message["text"])
+                            if command.get("type") == "finish":
+                                browser_finished.set()
+                                await deepgram.send(json.dumps({"type": "CloseStream"}))
+                                return
+                except (WebSocketDisconnect, websockets.ConnectionClosed):
+                    browser_finished.set()
+
+            forward_task = asyncio.create_task(forward_audio())
+            utterance_complete = False
+            try:
+                async for raw_message in deepgram:
+                    data = json.loads(raw_message)
+                    if data.get("type") == "Results":
+                        alternative = (data.get("channel", {}).get("alternatives") or [{}])[0]
+                        text = str(alternative.get("transcript") or "").strip()
+                        if data.get("is_final") and text:
+                            transcript_parts.append(text)
+                        if text:
+                            await websocket.send_json({"type": "interim", "transcript": text})
+                    elif data.get("type") == "UtteranceEnd" and transcript_parts:
+                        utterance_complete = True
+                        break
+            finally:
+                if not forward_task.done():
+                    forward_task.cancel()
+                await asyncio.gather(forward_task, return_exceptions=True)
+
+            transcript = " ".join(transcript_parts).strip()
+            await websocket.send_json({"type": "transcript", "transcript": transcript})
+            if utterance_complete and not browser_finished.is_set():
+                try:
+                    await deepgram.send(json.dumps({"type": "CloseStream"}))
+                except websockets.ConnectionClosed:
+                    pass
+    except Exception:
+        try:
+            await websocket.send_json({"type": "error", "message": "Live transcription was interrupted."})
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
 @app.post("/api/speak")
 async def speak(request: SpeakRequest, user: dict = Depends(require_user)) -> Response:
     api_key = require_setting("ELEVENLABS_API_KEY")
@@ -309,8 +416,8 @@ async def speak(request: SpeakRequest, user: dict = Depends(require_user)) -> Re
         headers={"xi-api-key": api_key, "Accept": "audio/mpeg"},
         json={
             "text": request.text.strip(),
-            "model_id": "eleven_multilingual_v2",
-            "voice_settings": {"stability": 0.68, "similarity_boost": 0.7, "style": 0.15, "use_speaker_boost": True},
+            "model_id": "eleven_flash_v2_5",
+            "voice_settings": {"stability": 0.68, "similarity_boost": 0.7, "use_speaker_boost": True},
         },
     )
     if response.is_error:
@@ -345,6 +452,127 @@ async def companion(request: CompanionRequest, user: dict = Depends(require_user
     except (httpx.RequestError, ValueError):
         raise HTTPException(status_code=502, detail="The companion could not prepare a reply. Please try again.")
     return {"reply": reply, "end_conversation": False}
+
+
+async def persist_conversation_memory(user_id: str, text: str) -> None:
+    try:
+        await asyncio.to_thread(app.state.memory.process, user_id, text)
+        await asyncio.to_thread(app.state.matching.refresh_profiles)
+    except Exception:
+        pass
+
+
+@app.websocket("/ws/respond")
+async def respond_stream(websocket: WebSocket) -> None:
+    """Stream model text and ElevenLabs audio back over one connection."""
+    user = await require_websocket_user(websocket)
+    if not user:
+        return
+    await websocket.accept()
+    memory_task: asyncio.Task | None = None
+    try:
+        request = await websocket.receive_json()
+        user_text = str(request.get("text") or "").strip()
+        if not user_text or len(user_text) > 2_000:
+            await websocket.send_json({"type": "error", "message": "Please send a short message."})
+            return
+
+        ending = detect_end_conversation(user_text)
+        if ending:
+            async def reply_deltas():
+                yield "Of course. Goodbye for now."
+        else:
+            filtered = filter_text(user_text)
+            context = await asyncio.to_thread(
+                retrieve_companion_context,
+                app.state.memory,
+                str(user["id"]),
+                user_text,
+                filtered.safety_flags,
+            )
+            provider = create_reply_provider(app.state.http)
+            reply_deltas = lambda: provider.stream_reply(user_text, context)
+            memory_task = asyncio.create_task(persist_conversation_memory(str(user["id"]), user_text))
+
+        api_key = os.getenv("ELEVENLABS_API_KEY")
+        voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+        if not api_key or not voice_id or api_key.startswith("your_") or voice_id.startswith("your_"):
+            raise RuntimeError("ElevenLabs is not configured.")
+
+        stream_params = urlencode({
+            "model_id": "eleven_flash_v2_5",
+            "output_format": "mp3_44100_128",
+            "auto_mode": "true",
+        })
+        reply_parts: list[str] = []
+        chunker = SentenceChunker()
+        send_lock = asyncio.Lock()
+
+        async def emit(payload: dict) -> None:
+            async with send_lock:
+                await websocket.send_json(payload)
+
+        async with websockets.connect(
+            f"{ELEVENLABS_TTS_STREAM_URL}/{voice_id}/stream-input?{stream_params}",
+            max_size=None,
+            ping_interval=20,
+        ) as elevenlabs:
+            await elevenlabs.send(json.dumps({
+                "text": " ",
+                "xi_api_key": api_key,
+                "voice_settings": {
+                    "stability": 0.68,
+                    "similarity_boost": 0.7,
+                    "use_speaker_boost": True,
+                },
+            }))
+
+            async def relay_audio() -> None:
+                async for raw_message in elevenlabs:
+                    data = json.loads(raw_message)
+                    if data.get("audio"):
+                        await emit({"type": "audio", "audio": data["audio"]})
+                    if data.get("is_final"):
+                        return
+
+            audio_task = asyncio.create_task(relay_audio())
+            async for delta in reply_deltas():
+                reply_parts.append(delta)
+                await emit({"type": "text_delta", "delta": delta})
+                for sentence in chunker.push(delta):
+                    await elevenlabs.send(json.dumps({"text": sentence + " "}))
+
+            final_chunk = chunker.finish()
+            if final_chunk:
+                await elevenlabs.send(json.dumps({"text": final_chunk + " ", "flush": True}))
+            else:
+                await elevenlabs.send(json.dumps({"text": " ", "flush": True}))
+            await elevenlabs.send(json.dumps({"text": ""}))
+            try:
+                await asyncio.wait_for(audio_task, timeout=15)
+            except asyncio.TimeoutError:
+                audio_task.cancel()
+                await asyncio.gather(audio_task, return_exceptions=True)
+
+        await emit({
+            "type": "response_done",
+            "reply": "".join(reply_parts).strip(),
+            "end_conversation": ending,
+        })
+        if memory_task:
+            await memory_task
+    except Exception:
+        try:
+            await websocket.send_json({"type": "error", "message": "Realtime reply was interrupted."})
+        except Exception:
+            pass
+    finally:
+        if memory_task and not memory_task.done():
+            memory_task.cancel()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 @app.post("/api/memory/process")

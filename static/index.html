@@ -158,10 +158,12 @@
       let noiseFloor = null;
       let speechPeak = 0;
       let currentAudioUrl;
+      let liveSocket;
+      let liveResultReceived = false;
 
       const NOISE_CALIBRATION_MS = 300;
       const REQUIRED_SPEECH_MS = 160;
-      const END_SILENCE_MS = 1800;
+      const END_SILENCE_MS = 1200;
       const EMPTY_TURN_MS = 15000;
       const MAX_TURN_MS = 30000;
 
@@ -195,6 +197,7 @@
         active = false;
         cancelAnimationFrame(monitorFrame);
         if (recorder?.state === 'recording') recorder.stop();
+        if (liveSocket?.readyState === WebSocket.OPEN) liveSocket.close();
         stream?.getTracks().forEach(track => track.stop());
         audio.pause();
         window.speechSynthesis.cancel();
@@ -205,9 +208,10 @@
         setStatus('Conversation ended. I’ll be here when you want to talk again.');
       }
 
-      function startListeningTurn() {
+      async function startListeningTurn() {
         if (!active) return;
         chunks = [];
+        liveResultReceived = false;
         heardSpeech = false;
         speechDuration = 0;
         lastSpeechAt = 0;
@@ -217,13 +221,84 @@
         speechPeak = 0;
         recorder = new MediaRecorder(stream);
         recorder.addEventListener('dataavailable', event => {
-          if (event.data.size) chunks.push(event.data);
+          if (!event.data.size) return;
+          chunks.push(event.data);
+          if (liveSocket?.readyState === WebSocket.OPEN) {
+            liveSocket.send(event.data);
+          }
         });
-        recorder.addEventListener('stop', processTurn, { once: true });
+        recorder.addEventListener('stop', () => {
+          if (!liveResultReceived && active) processTurn();
+        }, { once: true });
+
+        try {
+          liveSocket = await openLiveTranscription();
+        } catch (_) {
+          liveSocket = null;
+        }
+        if (!active) return;
         recorder.start(250);
         micActivity.classList.remove('hidden');
-        setStatus('Listening… Just speak naturally.', true);
+        setStatus(liveSocket ? 'Listening live… Just speak naturally.' : 'Listening… Just speak naturally.', true);
         monitorSilence();
+      }
+
+      function openLiveTranscription() {
+        return new Promise((resolve, reject) => {
+          const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const socket = new WebSocket(`${protocol}//${location.host}/ws/transcribe`);
+          let settled = false;
+          const timeout = setTimeout(() => {
+            if (!settled) {
+              settled = true;
+              socket.close();
+              reject(new Error('Live transcription connection timed out.'));
+            }
+          }, 2500);
+
+          socket.addEventListener('open', () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve(socket);
+          }, { once: true });
+          socket.addEventListener('error', () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            reject(new Error('Live transcription is unavailable.'));
+          }, { once: true });
+          socket.addEventListener('message', event => handleLiveTranscriptionMessage(socket, event));
+          socket.addEventListener('close', () => {
+            if (socket === liveSocket && !liveResultReceived && active && recorder?.state === 'recording') {
+              liveSocket = null;
+              recorder.stop();
+            }
+          });
+        });
+      }
+
+      async function handleLiveTranscriptionMessage(socket, event) {
+        const data = JSON.parse(event.data);
+        if (data.type === 'interim' && data.transcript) {
+          transcriptElement.textContent = data.transcript;
+          return;
+        }
+        if (data.type === 'error') {
+          socket.close();
+          if (recorder?.state === 'recording') recorder.stop();
+          return;
+        }
+        if (data.type !== 'transcript' || liveResultReceived) return;
+        liveResultReceived = true;
+        cancelAnimationFrame(monitorFrame);
+        if (recorder?.state === 'recording') recorder.stop();
+        socket.close();
+        if (!data.transcript) {
+          setStatus('I didn’t quite catch that. Please try again.');
+          return resumeSoon();
+        }
+        await handleTranscript(data.transcript);
       }
 
       function monitorSilence() {
@@ -274,7 +349,7 @@
           }
         }
 
-        if (heardSpeech && now - lastSpeechAt > END_SILENCE_MS) {
+        if (!liveSocket && heardSpeech && now - lastSpeechAt > END_SILENCE_MS) {
           cancelAnimationFrame(monitorFrame);
           recorder.stop();
           return;
@@ -282,7 +357,18 @@
 
         if (turnAge > MAX_TURN_MS || (!heardSpeech && turnAge > EMPTY_TURN_MS)) {
           cancelAnimationFrame(monitorFrame);
-          recorder.stop();
+          if (liveSocket?.readyState === WebSocket.OPEN) {
+            liveSocket.send(JSON.stringify({ type: 'finish' }));
+            setTimeout(() => {
+              if (!liveResultReceived && recorder?.state === 'recording') {
+                liveSocket?.close();
+                liveSocket = null;
+                recorder.stop();
+              }
+            }, 3000);
+          } else {
+            recorder.stop();
+          }
           return;
         }
         monitorFrame = requestAnimationFrame(monitorSilence);
@@ -314,52 +400,207 @@
             return resumeSoon();
           }
 
-          transcriptElement.textContent = transcription.transcript;
+          await handleTranscript(transcription.transcript);
+        } catch (error) {
+          setStatus(error.message || 'Something went wrong. I’ll listen again in a moment.');
+          resumeSoon();
+        }
+      }
+
+      async function handleTranscript(transcript) {
+        try {
+          transcriptElement.textContent = transcript;
           replyElement.textContent = 'Thinking…';
           messages.classList.remove('hidden');
           setStatus('Thinking of a gentle reply…');
 
-          const companion = await requestJson('/api/companion', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: transcription.transcript })
-          });
-          replyElement.textContent = companion.reply;
-          setStatus('Here’s what I’m thinking…');
-
-          const speechResponse = await authenticatedFetch('/api/speak', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: companion.reply })
-          });
-          if (!speechResponse.ok) {
-            setStatus('Speaking with the device voice…');
-            await speakWithDeviceVoice(companion.reply);
-            if (companion.end_conversation) {
+          try {
+            const streamed = await streamCompanionReply(transcript);
+            if (streamed.end_conversation) {
               stopConversation();
               return;
             }
             if (active) startListeningTurn();
             return;
+          } catch (_) {
+            await legacyCompanionReply(transcript);
           }
+        } catch (error) {
+          setStatus(error.message || 'Something went wrong. I’ll listen again in a moment.');
+          resumeSoon();
+        }
+      }
 
-          if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
-          currentAudioUrl = URL.createObjectURL(await speechResponse.blob());
-          audio.src = currentAudioUrl;
-          await audio.play();
-          await new Promise(resolve => {
-            audio.addEventListener('ended', resolve, { once: true });
-            audio.addEventListener('error', resolve, { once: true });
-          });
+      async function legacyCompanionReply(transcript) {
+        const companion = await requestJson('/api/companion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: transcript })
+        });
+        replyElement.textContent = companion.reply;
+        setStatus('Here’s what I’m thinking…');
+
+        const speechResponse = await authenticatedFetch('/api/speak', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: companion.reply })
+        });
+        if (!speechResponse.ok) {
+          setStatus('Speaking with the device voice…');
+          await speakWithDeviceVoice(companion.reply);
           if (companion.end_conversation) {
             stopConversation();
             return;
           }
           if (active) startListeningTurn();
-        } catch (error) {
-          setStatus(error.message || 'Something went wrong. I’ll listen again in a moment.');
-          resumeSoon();
+          return;
         }
+
+        if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
+        currentAudioUrl = URL.createObjectURL(await speechResponse.blob());
+        audio.src = currentAudioUrl;
+        await audio.play();
+        await new Promise(resolve => {
+          audio.addEventListener('ended', resolve, { once: true });
+          audio.addEventListener('error', resolve, { once: true });
+        });
+        if (companion.end_conversation) {
+          stopConversation();
+          return;
+        }
+        if (active) startListeningTurn();
+      }
+
+      function streamCompanionReply(transcript) {
+        if (!('MediaSource' in window) || !MediaSource.isTypeSupported('audio/mpeg')) {
+          return Promise.reject(new Error('Streaming audio is unavailable in this browser.'));
+        }
+        const player = createStreamingMp3Player();
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const socket = new WebSocket(`${protocol}//${location.host}/ws/respond`);
+
+        return new Promise((resolve, reject) => {
+          let responseReceived = false;
+          let reply = '';
+
+          socket.addEventListener('open', () => {
+            socket.send(JSON.stringify({ text: transcript }));
+          }, { once: true });
+          socket.addEventListener('message', async event => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'text_delta') {
+              reply += data.delta;
+              replyElement.textContent = reply;
+              setStatus('Responding…');
+            } else if (data.type === 'audio') {
+              player.append(data.audio);
+            } else if (data.type === 'error') {
+              player.abort();
+              reject(new Error(data.message || 'Realtime reply failed.'));
+            } else if (data.type === 'response_done') {
+              responseReceived = true;
+              replyElement.textContent = data.reply || reply;
+              player.finish();
+              try {
+                await player.finished;
+                resolve(data);
+              } catch (error) {
+                reject(error);
+              } finally {
+                socket.close();
+              }
+            }
+          });
+          socket.addEventListener('error', () => {
+            if (!responseReceived) {
+              player.abort();
+              reject(new Error('Realtime reply connection failed.'));
+            }
+          });
+          socket.addEventListener('close', () => {
+            if (!responseReceived) {
+              player.abort();
+              reject(new Error('Realtime reply ended early.'));
+            }
+          });
+        });
+      }
+
+      function createStreamingMp3Player() {
+        const mediaSource = new MediaSource();
+        const queue = [];
+        let sourceBuffer;
+        let finishRequested = false;
+        let started = false;
+        let settled = false;
+        let resolveFinished;
+        let rejectFinished;
+        const finished = new Promise((resolve, reject) => {
+          resolveFinished = resolve;
+          rejectFinished = reject;
+        });
+
+        if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
+        currentAudioUrl = URL.createObjectURL(mediaSource);
+        audio.src = currentAudioUrl;
+
+        const settle = error => {
+          if (settled) return;
+          settled = true;
+          if (error) rejectFinished(error);
+          else resolveFinished();
+        };
+
+        const pump = () => {
+          if (!sourceBuffer || sourceBuffer.updating || mediaSource.readyState !== 'open') return;
+          if (queue.length) {
+            sourceBuffer.appendBuffer(queue.shift());
+            if (!started) {
+              started = true;
+              audio.play().catch(settle);
+            }
+            return;
+          }
+          if (finishRequested) {
+            mediaSource.endOfStream();
+            if (!started) settle();
+          }
+        };
+
+        mediaSource.addEventListener('sourceopen', () => {
+          try {
+            sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+            sourceBuffer.mode = 'sequence';
+            sourceBuffer.addEventListener('updateend', pump);
+            sourceBuffer.addEventListener('error', () => settle(new Error('Streaming audio could not be decoded.')));
+            pump();
+          } catch (error) {
+            settle(error);
+          }
+        }, { once: true });
+        audio.addEventListener('ended', () => settle(), { once: true });
+        audio.addEventListener('error', () => settle(new Error('Streaming audio playback failed.')), { once: true });
+
+        return {
+          append(base64Audio) {
+            const binary = atob(base64Audio);
+            const bytes = new Uint8Array(binary.length);
+            for (let index = 0; index < binary.length; index += 1) {
+              bytes[index] = binary.charCodeAt(index);
+            }
+            queue.push(bytes);
+            pump();
+          },
+          finish() {
+            finishRequested = true;
+            pump();
+          },
+          abort() {
+            audio.pause();
+            settle();
+          },
+          finished
+        };
       }
 
       async function requestJson(url, options) {

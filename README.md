@@ -29,6 +29,12 @@ profile and up to five relevant memories. The response rules use respectful
 adult language, avoid elderspeak, follow the user's topic, and ask at most one
 question. If memory retrieval fails, conversation continues without memory.
 
+The browser prefers the realtime pipeline when WebSockets are available.
+`/ws/transcribe` relays microphone chunks to Deepgram Live and uses server-side
+utterance detection. `/ws/respond` streams OpenAI text into ElevenLabs Flash
+v2.5, then relays audio chunks while the reply is still being generated. The
+original HTTP endpoints remain available as a fallback.
+
 The OpenAI provider lives entirely in `companion.py`, behind the
 `ReplyProvider` interface. The current message and compact private context are
 sent with `store: false`. Deepgram and ElevenLabs remain independent.

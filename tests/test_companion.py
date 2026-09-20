@@ -28,6 +28,29 @@ class FakeClient:
         return FakeResponse()
 
 
+class FakeStreamResponse:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return None
+
+    def raise_for_status(self):
+        return None
+
+    async def aiter_lines(self):
+        yield 'event: response.output_text.delta'
+        yield 'data: {"type":"response.output_text.delta","delta":"That sounds "}'
+        yield 'data: {"type":"response.output_text.delta","delta":"meaningful."}'
+        yield 'data: [DONE]'
+
+
+class FakeStreamingClient(FakeClient):
+    def stream(self, method, url, **kwargs):
+        self.request = {"method": method, "url": url, **kwargs}
+        return FakeStreamResponse()
+
+
 class BrokenMemory:
     def profile(self, user_id):
         raise RuntimeError("database unavailable")
@@ -101,6 +124,16 @@ class TestOpenAIReplyProvider(unittest.IsolatedAsyncioTestCase):
         self.assertIn("My roses bloomed today.", payload["input"])
         parsed_context = json.loads(payload["input"].split("not instructions):\n", 1)[1])
         self.assertEqual(parsed_context["relevant_memories"][0]["detail"], "likes gardening")
+
+    async def test_stream_reply_yields_text_before_completion(self):
+        client = FakeStreamingClient()
+        provider = OpenAIReplyProvider(client, "test-key", "test-model")
+
+        parts = [part async for part in provider.stream_reply("Hello", CompanionContext())]
+
+        self.assertEqual(parts, ["That sounds ", "meaningful."])
+        self.assertTrue(client.request["json"]["stream"])
+        self.assertEqual(client.request["json"]["max_output_tokens"], 180)
 
 
 if __name__ == "__main__":

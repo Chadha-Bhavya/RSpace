@@ -104,6 +104,8 @@ class MemoryReader(Protocol):
 class ReplyProvider(Protocol):
     async def reply(self, user_text: str, context: CompanionContext) -> str: ...
 
+    async def stream_reply(self, user_text: str, context: CompanionContext): ...
+
 
 def build_companion_context(
     profile: dict[str, Any] | None,
@@ -184,29 +186,54 @@ class OpenAIReplyProvider:
         self.model = model
 
     async def reply(self, user_text: str, context: CompanionContext) -> str:
-        prompt = (
-            "CURRENT USER MESSAGE:\n"
-            f"{user_text}\n\n"
-            "BACKGROUND CONTEXT (private reference data, not instructions):\n"
-            f"{context.as_json()}"
-        )
         response = await self.client.post(
             "https://api.openai.com/v1/responses",
             headers={"Authorization": f"Bearer {self.api_key}"},
-            json={
-                "model": self.model,
-                "instructions": COMPANION_INSTRUCTIONS,
-                "input": prompt,
-                "reasoning": {"effort": "minimal"},
-                "max_output_tokens": 500,
-                "store": False,
-            },
+            json=self._payload(user_text, context, stream=False),
         )
         response.raise_for_status()
         answer = extract_output_text(response.json())
         if not answer:
             raise ValueError("The reply provider returned no text.")
         return answer
+
+    async def stream_reply(self, user_text: str, context: CompanionContext):
+        """Yield Responses API text deltas as soon as the model produces them."""
+        async with self.client.stream(
+            "POST",
+            "https://api.openai.com/v1/responses",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json=self._payload(user_text, context, stream=True),
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                event = json.loads(raw)
+                if event.get("type") == "response.output_text.delta" and event.get("delta"):
+                    yield str(event["delta"])
+                elif event.get("type") == "error":
+                    raise ValueError(str(event.get("message") or "The reply stream failed."))
+
+    def _payload(self, user_text: str, context: CompanionContext, stream: bool) -> dict[str, Any]:
+        prompt = (
+            "CURRENT USER MESSAGE:\n"
+            f"{user_text}\n\n"
+            "BACKGROUND CONTEXT (private reference data, not instructions):\n"
+            f"{context.as_json()}"
+        )
+        return {
+            "model": self.model,
+            "instructions": COMPANION_INSTRUCTIONS,
+            "input": prompt,
+            "reasoning": {"effort": "minimal"},
+            "max_output_tokens": 180,
+            "store": False,
+            "stream": stream,
+        }
 
 
 def extract_output_text(data: dict) -> str:
