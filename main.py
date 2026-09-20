@@ -16,6 +16,7 @@ from auth import AuthError, create_auth_client
 from companion import create_reply_provider, retrieve_companion_context
 from memory_engine import MemoryEngine
 from memory_engine.filters import filter_text
+from matching import create_matching_engine
 
 load_dotenv()
 
@@ -31,6 +32,7 @@ REFRESH_COOKIE = "rspace_refresh_token"
 async def lifespan(app: FastAPI):
     app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(45.0))
     app.state.memory = MemoryEngine(DATA_DIR)
+    app.state.matching = create_matching_engine(app.state.memory, DATA_DIR)
     yield
     await app.state.http.aclose()
 
@@ -66,6 +68,10 @@ class SignUpRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str = Field(min_length=5, max_length=254, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
     password: str = Field(min_length=8, max_length=128)
+
+
+class MatchDecisionRequest(BaseModel):
+    decision: str = Field(pattern=r"^(accept|pass|block)$")
 
 
 def require_setting(name: str) -> str:
@@ -230,6 +236,13 @@ async def refresh_session(request: Request) -> Response:
 @app.get("/api/auth/me")
 async def current_account(request: Request, user: dict = Depends(require_user)) -> dict[str, object]:
     account = await asyncio.to_thread(request.app.state.memory.store.load_account_profile, str(user["id"]))
+    if account:
+        await asyncio.to_thread(
+            request.app.state.memory.store.save_account_profile,
+            str(user["id"]),
+            str(account.get("email") or user.get("email") or ""),
+            str(account.get("display_name") or "User"),
+        )
     return {"user": public_user(user, account)}
 
 
@@ -281,6 +294,8 @@ async def transcribe(
     data = response.json()
     transcript = data.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0].get("transcript", "").strip()
     memory = await asyncio.to_thread(app.state.memory.process, str(user["id"]), transcript) if transcript else None
+    if transcript:
+        await asyncio.to_thread(app.state.matching.refresh_profiles)
     return {"transcript": transcript, "memory": memory}
 
 
@@ -333,7 +348,9 @@ async def companion(request: CompanionRequest, user: dict = Depends(require_user
 @app.post("/api/memory/process")
 async def process_memory(request: MemoryRequest, user: dict = Depends(require_user)) -> dict[str, object]:
     try:
-        return await asyncio.to_thread(app.state.memory.process, str(user["id"]), request.text)
+        result = await asyncio.to_thread(app.state.memory.process, str(user["id"]), request.text)
+        await asyncio.to_thread(app.state.matching.refresh_profiles)
+        return result
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -364,6 +381,40 @@ async def memory_report(user: dict = Depends(require_user)) -> dict[str, object]
         return await asyncio.to_thread(app.state.memory.report, str(user["id"]))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/matches")
+async def list_matches(user: dict = Depends(require_user)) -> list[dict[str, object]]:
+    try:
+        return await asyncio.to_thread(app.state.matching.find_matches, str(user["id"]))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/matches/{match_id}/decision")
+async def decide_match(
+    match_id: str,
+    choice: MatchDecisionRequest,
+    user: dict = Depends(require_user),
+) -> dict[str, object]:
+    try:
+        return await asyncio.to_thread(app.state.matching.decide, str(user["id"]), match_id, choice.decision)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/api/connections")
+async def list_connections(user: dict = Depends(require_user)) -> list[dict[str, object]]:
+    return await asyncio.to_thread(app.state.matching.connections, str(user["id"]))
+
+
+@app.post("/api/connections/{match_id}/disconnect")
+async def disconnect_match(match_id: str, user: dict = Depends(require_user)) -> dict[str, str]:
+    try:
+        await asyncio.to_thread(app.state.matching.disconnect, str(user["id"]), match_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return {"status": "disconnected"}
 
 
 @app.get("/")

@@ -38,6 +38,22 @@
       .card { background: white; border-radius: 18px; box-shadow: 0 4px 16px #2f463817; padding: 1rem 1.2rem; }
       .card strong { color: #176b57; display: block; font-size: .9rem; letter-spacing: .04em; margin-bottom: .35rem; text-transform: uppercase; }
       .card p { margin: 0; }
+      .privacy-note { color: #526159; font-size: .78rem; line-height: 1.4; margin: 1rem 0 0; }
+      .matching { border-top: 1px solid #d9d7cf; margin-top: 3rem; padding-top: 2rem; text-align: left; }
+      .matching h2 { margin: 0; }
+      .matching-intro { color: #526159; font-size: .9rem; margin: .25rem 0 1rem; }
+      .match-list { display: grid; gap: 1rem; }
+      .match-card { background: white; border-radius: 18px; box-shadow: 0 4px 16px #2f463817; padding: 1.2rem; }
+      .match-card h3 { margin: 0 0 .35rem; }
+      .match-card p { margin: .25rem 0; }
+      .match-score { color: #176b57; font-size: .78rem; font-weight: 700; text-transform: uppercase; }
+      .match-actions { display: flex; flex-wrap: wrap; gap: .55rem; margin-top: 1rem; }
+      .match-actions button { border: 0; border-radius: 999px; cursor: pointer; font: inherit; font-size: .9rem; font-weight: 700; min-height: 44px; padding: .55rem 1rem; }
+      .accept-match { background: #176b57; color: white; }
+      .pass-match { background: #e7ebe8; color: #25322c; }
+      .block-match { background: #f3dfdf; color: #7a3030; }
+      .match-empty { background: #ffffffa8; border-radius: 16px; color: #526159; font-size: .9rem; padding: 1rem; }
+      .connection-email { font-weight: 700; word-break: break-all; }
       .hidden { display: none; }
       audio { margin-top: 1.5rem; width: 100%; }
     </style>
@@ -61,6 +77,7 @@
           <label for="password">Password</label>
           <input id="password" name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="128" />
           <button id="auth-submit" class="auth-submit" type="submit">Log in</button>
+          <p id="matching-disclosure" class="privacy-note hidden">Matching is always on. RSpace uses only your interests and conversation preferences. Your email stays private until you and a match both accept.</p>
           <p id="auth-message" aria-live="polite"></p>
         </form>
       </section>
@@ -87,6 +104,14 @@
         <div class="card"><strong>RSpace</strong><p id="reply"></p></div>
       </section>
       <audio id="audio" playsinline></audio>
+      <section class="matching" aria-labelledby="matching-title">
+        <h2 id="matching-title">People you may connect with</h2>
+        <p class="matching-intro">Matches use shared interests, never private transcripts, health details, or wellness signals.</p>
+        <div id="match-list" class="match-list"><p class="match-empty">Looking for thoughtful matches…</p></div>
+        <h2 style="margin-top:2rem">Your connections</h2>
+        <p class="matching-intro">Email is shown only after you both accept.</p>
+        <div id="connection-list" class="match-list"><p class="match-empty">No connections yet.</p></div>
+      </section>
     </main>
 
     <script>
@@ -113,6 +138,9 @@
       const authMessage = document.querySelector('#auth-message');
       const userName = document.querySelector('#user-name');
       const logoutButton = document.querySelector('#logout');
+      const matchingDisclosure = document.querySelector('#matching-disclosure');
+      const matchList = document.querySelector('#match-list');
+      const connectionList = document.querySelector('#connection-list');
 
       let active = false;
       let authMode = 'login';
@@ -353,6 +381,7 @@
         nameInput.required = signingUp;
         passwordInput.autocomplete = signingUp ? 'new-password' : 'current-password';
         authSubmit.textContent = signingUp ? 'Create account' : 'Log in';
+        matchingDisclosure.classList.toggle('hidden', !signingUp);
         authMessage.textContent = '';
       }
 
@@ -407,6 +436,93 @@
         authMessage.textContent = '';
         authView.classList.add('hidden');
         appView.classList.remove('hidden');
+        loadMatching();
+      }
+
+      async function loadMatching() {
+        try {
+          const [matches, connections] = await Promise.all([
+            requestJson('/api/matches'),
+            requestJson('/api/connections')
+          ]);
+          renderMatches(matches);
+          renderConnections(connections);
+        } catch (error) {
+          matchList.innerHTML = `<p class="match-empty">${escapeHtml(error.message || 'Matches are unavailable right now.')}</p>`;
+        }
+      }
+
+      function renderMatches(matches) {
+        if (!matches.length) {
+          matchList.innerHTML = '<p class="match-empty">No match yet. RSpace will check again as more people join and share interests.</p>';
+          return;
+        }
+        matchList.innerHTML = matches.map(match => `
+          <article class="match-card">
+            <span class="match-score">${match.score}% match</span>
+            <h3>You matched with ${escapeHtml(match.name)}</h3>
+            <p><strong>Why:</strong> ${escapeHtml(match.why)}</p>
+            ${match.your_decision === 'accept'
+              ? '<p>Accepted. Waiting for them to accept too.</p>'
+              : `<div class="match-actions">
+                  <button class="accept-match" data-match="${match.match_id}" data-decision="accept">Accept</button>
+                  <button class="pass-match" data-match="${match.match_id}" data-decision="pass">Pass</button>
+                  <button class="block-match" data-match="${match.match_id}" data-decision="block">Block</button>
+                </div>`}
+          </article>`).join('');
+        matchList.querySelectorAll('[data-decision]').forEach(control => control.addEventListener('click', decideMatch));
+      }
+
+      function renderConnections(connections) {
+        if (!connections.length) {
+          connectionList.innerHTML = '<p class="match-empty">No mutual connections yet.</p>';
+          return;
+        }
+        connectionList.innerHTML = connections.map(connection => `
+          <article class="match-card">
+            <h3>${escapeHtml(connection.name)}</h3>
+            <p>${escapeHtml(connection.why)}</p>
+            <p class="connection-email">${escapeHtml(connection.email)}</p>
+            <div class="match-actions">
+              <button class="pass-match" data-disconnect="${connection.match_id}">Disconnect</button>
+              <button class="block-match" data-match="${connection.match_id}" data-decision="block">Block</button>
+            </div>
+          </article>`).join('');
+        connectionList.querySelectorAll('[data-disconnect]').forEach(control => control.addEventListener('click', disconnectMatch));
+        connectionList.querySelectorAll('[data-decision]').forEach(control => control.addEventListener('click', decideMatch));
+      }
+
+      async function decideMatch(event) {
+        const control = event.currentTarget;
+        control.disabled = true;
+        try {
+          await requestJson(`/api/matches/${control.dataset.match}/decision`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ decision: control.dataset.decision })
+          });
+          await loadMatching();
+        } catch (error) {
+          control.disabled = false;
+          setStatus(error.message || 'That choice could not be saved.');
+        }
+      }
+
+      async function disconnectMatch(event) {
+        const control = event.currentTarget;
+        control.disabled = true;
+        try {
+          await requestJson(`/api/connections/${control.dataset.disconnect}/disconnect`, { method: 'POST' });
+          await loadMatching();
+        } catch (error) {
+          control.disabled = false;
+          setStatus(error.message || 'The connection could not be changed.');
+        }
+      }
+
+      function escapeHtml(value) {
+        const element = document.createElement('span');
+        element.textContent = String(value ?? '');
+        return element.innerHTML;
       }
 
       function showAuth(message = '') {

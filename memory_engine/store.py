@@ -27,6 +27,8 @@ class MemoryStore(Protocol):
 
     def load_account_profile(self, user_id: str) -> dict[str, Any]: ...
 
+    def list_account_profiles(self) -> list[dict[str, Any]]: ...
+
 
 def safe_user_id(user_id: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", user_id.strip())[:80]
@@ -117,6 +119,17 @@ class JsonlMemoryStore:
             return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return {}
+
+    def list_account_profiles(self) -> list[dict[str, Any]]:
+        accounts: list[dict[str, Any]] = []
+        for path in self.root.glob("*/account.json"):
+            try:
+                account = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if account.get("user_id"):
+                accounts.append(account)
+        return accounts
 
 
 class PostgresMemoryStore:
@@ -328,3 +341,22 @@ class PostgresMemoryStore:
             "created_at": row[3].isoformat(),
             "updated_at": row[4].isoformat(),
         }
+
+    def list_account_profiles(self) -> list[dict[str, Any]]:
+        self._ensure_schema()
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT user_id, email, display_name, created_at, updated_at "
+                "FROM account_profiles ORDER BY created_at ASC"
+            )
+            rows = cursor.fetchall()
+        return [
+            {
+                "user_id": row[0],
+                "email": row[1],
+                "display_name": row[2],
+                "created_at": row[3].isoformat(),
+                "updated_at": row[4].isoformat(),
+            }
+            for row in rows
+        ]

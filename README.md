@@ -76,3 +76,25 @@ user's ID. Private memory routes are now:
 - `GET /api/memory/report`
 
 Run local tests with `python3 -m unittest discover -s tests -v`.
+
+## Matching
+
+Matching is enabled for every account and disclosed during signup. A separate
+matching profile contains only positive interest labels, communication
+preferences, display name, and recent account activity. Raw transcripts,
+evidence quotes, relationships, medical details, availability, and social
+wellness signals are excluded.
+
+Cold-start recommendations require at least two meaningful shared interests and
+a score of 72% or higher. They combine semantic similarity with reciprocal
+ranking rather than fixed category weights. Accept, pass, block, and disconnect
+decisions train a small per-user online ranking model after five decisions.
+Email addresses are returned only after both people accept the same match.
+
+Supabase tables for profiles, impressions, decisions, connections, blocks, and
+ranking models are created automatically. The matching routes are:
+
+- `GET /api/matches`
+- `POST /api/matches/{match_id}/decision` with `accept`, `pass`, or `block`
+- `GET /api/connections`
+- `POST /api/connections/{match_id}/disconnect`
