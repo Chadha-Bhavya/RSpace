@@ -53,7 +53,9 @@
       let monitorFrame;
       let chunks = [];
       let heardSpeech = false;
+      let speechDuration = 0;
       let lastSpeechAt = 0;
+      let lastMonitorAt = 0;
       let turnStartedAt = 0;
       let currentAudioUrl;
 
@@ -95,7 +97,9 @@
         if (!active) return;
         chunks = [];
         heardSpeech = false;
+        speechDuration = 0;
         lastSpeechAt = 0;
+        lastMonitorAt = performance.now();
         turnStartedAt = performance.now();
         recorder = new MediaRecorder(stream);
         recorder.addEventListener('dataavailable', event => {
@@ -113,11 +117,16 @@
         analyser.getFloatTimeDomainData(samples);
         const rms = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
         const now = performance.now();
+        const elapsed = Math.min(now - lastMonitorAt, 100);
+        lastMonitorAt = now;
 
-        if (rms > 0.018) {
-          heardSpeech = true;
+        if (rms > 0.012) {
+          speechDuration += elapsed;
           lastSpeechAt = now;
+          if (speechDuration >= 180) heardSpeech = true;
           setStatus('I’m listening…', true);
+        } else if (!heardSpeech) {
+          speechDuration = 0;
         }
 
         if (heardSpeech && now - lastSpeechAt > 1400) {
@@ -145,8 +154,14 @@
         try {
           setStatus('Let me make sure I heard you correctly…');
           const form = new FormData();
-          const mimeType = recorder.mimeType || 'audio/webm';
-          form.append('audio', new Blob(chunks, { type: mimeType }), 'conversation-audio');
+          const mimeType = (recorder.mimeType || 'audio/webm').split(';')[0];
+          const extension = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+          const recording = new Blob(chunks, { type: mimeType });
+          if (recording.size < 1024) {
+            setStatus('I didn’t hear enough audio. Please try again.');
+            return resumeSoon();
+          }
+          form.append('audio', recording, `conversation.${extension}`);
           const transcription = await requestJson('/api/transcribe', { method: 'POST', body: form });
 
           if (!transcription.transcript) {
