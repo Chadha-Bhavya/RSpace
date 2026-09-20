@@ -102,6 +102,4 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 | `GET` | `/api/matches` | Find relevant connections |
 | `GET` | `/api/connections` | List mutually accepted connections |
 
-## License
 
-This project does not currently include an open-source license.
