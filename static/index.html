@@ -10,7 +10,8 @@
       html { font-size: 18px; }
       body { background: var(--cream); color: var(--ink); font: 1rem/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; }
       button, input { font: inherit; }
-      button { touch-action: manipulation; }
+      button { touch-action: manipulation; transition: background-color 160ms ease, color 160ms ease, transform 120ms ease; }
+      button:active { transform: scale(.97); }
       button:focus-visible, input:focus-visible { outline: 4px solid #e0a33b; outline-offset: 3px; }
       h1, h2, h3, p { overflow-wrap: anywhere; }
       h1 { font-size: clamp(2.15rem, 6vw, 3.35rem); letter-spacing: -.04em; line-height: 1.08; margin: 0; }
@@ -24,6 +25,9 @@
       .auth-shell { width: 100%; }
       .auth-brand { margin-bottom: 1.15rem; }
       .auth-brand .intro { margin-left: auto; margin-right: auto; max-width: 520px; }
+      .welcome-illustration { display: block; height: 104px; margin: .7rem auto .9rem; width: 190px; }
+      .welcome-illustration .hello-line { animation: hello-drift 3.8s ease-in-out infinite; transform-origin: center; }
+      @keyframes hello-drift { 50% { transform: translateY(-3px); } }
       .auth-card { background: var(--white); border: 1px solid #dde3de; border-radius: 20px; box-shadow: 0 10px 30px #2f463814; margin: 1rem auto 0; padding: clamp(1rem, 3vw, 1.4rem); text-align: left; }
       .auth-tabs { background: #eef2ef; border-radius: 14px; display: grid; gap: .25rem; grid-template-columns: 1fr 1fr; margin-bottom: 1.2rem; padding: .25rem; }
       .auth-tab, .secondary-button { background: transparent; border: 2px solid transparent; border-radius: 11px; color: var(--muted); cursor: pointer; font-weight: 750; min-height: 48px; padding: .5rem .8rem; }
@@ -54,6 +58,25 @@
       #conversation { font-size: 1.05rem; margin-top: 1.25rem; min-width: min(100%, 220px); }
       #conversation.stop { background: var(--red); }
       #status { font-size: 1.05rem; font-weight: 700; min-height: 3rem; margin: 1.2rem 0 0; }
+      .conversation-motion { align-items: center; display: flex; height: 36px; justify-content: center; margin: -.35rem auto .4rem; }
+      .conversation-motion > span { display: none; }
+      .talk-hero[data-state="listening"] .listening-motion,
+      .talk-hero[data-state="thinking"] .thinking-motion,
+      .talk-hero[data-state="speaking"] .speaking-motion { display: flex; }
+      .listening-motion { align-items: center; background: #e7f0ec; border-radius: 50%; height: 34px; justify-content: center; width: 34px; }
+      .listening-motion svg { color: var(--green); height: 19px; width: 19px; }
+      .talk-hero[data-state="listening"] .listening-motion { animation: listen-pulse 1.8s ease-in-out infinite; }
+      @keyframes listen-pulse { 50% { box-shadow: 0 0 0 9px #176b5715; transform: scale(1.06); } }
+      .thinking-motion { align-items: center; gap: 6px; }
+      .thinking-motion i { animation: thinking-dot 1.2s ease-in-out infinite; background: var(--green); border-radius: 50%; height: 8px; width: 8px; }
+      .thinking-motion i:nth-child(2) { animation-delay: 150ms; }
+      .thinking-motion i:nth-child(3) { animation-delay: 300ms; }
+      @keyframes thinking-dot { 50% { opacity: .35; transform: translateY(-4px); } }
+      .speaking-motion { align-items: center; gap: 4px; height: 30px; }
+      .speaking-motion i { animation: speaking-wave .9s ease-in-out infinite; background: var(--green); border-radius: 5px; height: 10px; width: 4px; }
+      .speaking-motion i:nth-child(2), .speaking-motion i:nth-child(4) { animation-delay: 120ms; }
+      .speaking-motion i:nth-child(3) { animation-delay: 240ms; }
+      @keyframes speaking-wave { 50% { height: 26px; } }
       .mic-activity { margin: .3rem auto 0; max-width: 520px; }
       .mic-labels { align-items: center; color: var(--muted); display: flex; font-size: .82rem; justify-content: space-between; margin-bottom: .4rem; }
       #mic-state { color: var(--ink); font-weight: 750; }
@@ -88,6 +111,8 @@
       .matching-intro { color: var(--muted); font-size: .92rem; margin: .4rem 0 1rem; }
       .match-list { display: grid; gap: 1rem; }
       .match-card h3 { margin: .3rem 0 .5rem; }
+      .match-card.new-match { animation: new-match-glow 1.8s ease-out; }
+      @keyframes new-match-glow { 0%, 35% { border-color: #d48a27; box-shadow: 0 0 0 5px #d48a271b; } }
       .match-card p { margin: .35rem 0; }
       .match-score { color: var(--green); font-size: .82rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
       .why-row { align-items: flex-start; display: flex; gap: .7rem; justify-content: space-between; }
@@ -102,6 +127,15 @@
       .match-empty { background: #fffdf9; border: 1px solid #e2e5e1; border-radius: 18px; color: var(--muted); padding: 1.1rem; }
       .connection-details { display: grid; gap: .35rem; grid-template-columns: minmax(0, 1fr); }
       .connection-email { color: var(--green-dark); font-size: 1.05rem; font-weight: 800; word-break: break-word; }
+      .success-toast { align-items: center; background: var(--green-dark); border-radius: 14px; bottom: 1rem; box-shadow: 0 8px 24px #20312933; color: white; display: flex; font-weight: 750; gap: .55rem; left: 50%; max-width: calc(100% - 2rem); padding: .75rem 1rem; position: fixed; transform: translate(-50%, 20px); z-index: 20; }
+      .success-toast:not(.hidden) { animation: success-in 220ms ease-out forwards; }
+      .success-check { align-items: center; background: white; border-radius: 50%; color: var(--green-dark); display: flex; height: 24px; justify-content: center; width: 24px; }
+      @keyframes success-in { from { opacity: 0; transform: translate(-50%, 20px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+        button:active { transform: none; }
+      }
 
       @media (max-width: 640px) {
         html { font-size: 18px; }
@@ -124,6 +158,18 @@
           <p class="eyebrow">A new way to connect</p>
           <h1>RSpace</h1>
           <p class="intro">A comfortable place to talk, remember, and stay connected.</p>
+          <svg class="welcome-illustration" viewBox="0 0 190 104" role="img" aria-label="Two people enjoying a friendly conversation">
+            <path d="M34 89c8-17 18-25 31-25s24 8 31 25" fill="#e4ebe6"/>
+            <circle cx="65" cy="47" r="14" fill="#d6a06a"/>
+            <path d="M52 45c2-13 24-18 28 1-8-4-19-4-28-1Z" fill="#53645b"/>
+            <path d="M96 89c8-17 18-25 31-25s24 8 31 25" fill="#f4dfc5"/>
+            <circle cx="127" cy="47" r="14" fill="#b9794f"/>
+            <path d="M113 46c1-17 27-20 29 1-9-6-20-7-29-1Z" fill="#203129"/>
+            <g class="hello-line">
+              <path d="M80 14h38a10 10 0 0 1 10 10v9a10 10 0 0 1-10 10h-15l-9 8 2-8H80a10 10 0 0 1-10-10v-9a10 10 0 0 1 10-10Z" fill="#fff" stroke="#176b57" stroke-width="2"/>
+              <circle cx="88" cy="29" r="3" fill="#176b57"/><circle cx="99" cy="29" r="3" fill="#176b57"/><circle cx="110" cy="29" r="3" fill="#176b57"/>
+            </g>
+          </svg>
         </header>
         <section class="auth-card">
         <div class="auth-tabs">
@@ -175,12 +221,17 @@
       </nav>
 
       <section id="home-page" class="app-page" data-page="home">
-        <div class="talk-hero">
+        <div class="talk-hero" data-state="idle">
           <p class="eyebrow">Welcome, <span id="user-name"></span></p>
           <h1>Talk whenever you’re ready.</h1>
           <p class="intro">Start once, then speak naturally. RSpace will listen and respond.</p>
           <button id="conversation">Start talking</button>
           <p id="status" aria-live="polite">I’m ready when you are.</p>
+          <div class="conversation-motion" aria-hidden="true">
+            <span class="listening-motion"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg></span>
+            <span class="thinking-motion"><i></i><i></i><i></i></span>
+            <span class="speaking-motion"><i></i><i></i><i></i><i></i><i></i></span>
+          </div>
           <div id="mic-activity" class="mic-activity hidden" aria-hidden="true">
             <div class="mic-labels"><span>Microphone activity</span><span id="mic-state">Waiting for voice</span></div>
             <div class="mic-meter">
@@ -231,6 +282,9 @@
         </section>
       </section>
     </main>
+    <div id="success-toast" class="success-toast hidden" role="status" aria-live="polite">
+      <span class="success-check" aria-hidden="true">✓</span><span id="success-message">Saved</span>
+    </div>
 
     <script>
       const button = document.querySelector('#conversation');
@@ -264,6 +318,10 @@
       const lifeSpaceList = document.querySelector('#life-space-list');
       const viewButtons = document.querySelectorAll('[data-view]');
       const appPages = document.querySelectorAll('[data-page]');
+      const talkHero = document.querySelector('.talk-hero');
+      const successToast = document.querySelector('#success-toast');
+      const successMessage = document.querySelector('#success-message');
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
       let active = false;
       let authMode = 'login';
@@ -285,6 +343,8 @@
       let liveResultReceived = false;
       let conversationSessionId = null;
       let firstTurnInSession = false;
+      let successTimer;
+      const seenMatchIds = new Set();
 
       const NOISE_CALIBRATION_MS = 300;
       const REQUIRED_SPEECH_MS = 160;
@@ -312,7 +372,7 @@
         });
         if (target === 'life-space') loadLifeSpace();
         if (target === 'connections') loadMatching();
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        window.scrollTo({ top: 0, behavior: reduceMotion.matches ? 'auto' : 'smooth' });
       }
 
       async function startConversation() {
@@ -624,6 +684,7 @@
         if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
         currentAudioUrl = URL.createObjectURL(await speechResponse.blob());
         audio.src = currentAudioUrl;
+        setStatus('Speaking…');
         await audio.play();
         await new Promise(resolve => {
           audio.addEventListener('ended', resolve, { once: true });
@@ -662,6 +723,7 @@
               replyElement.textContent = reply;
               setStatus('Responding…');
             } else if (data.type === 'audio') {
+              setStatus('Speaking…');
               player.append(data.audio);
             } else if (data.type === 'error') {
               player.abort();
@@ -826,6 +888,7 @@
             authMessage.textContent = data.message;
             return;
           }
+          if (authMode === 'signup') showSuccess('Account created');
           showApp(data.user);
           authForm.reset();
         } catch (error) {
@@ -914,7 +977,7 @@
           return;
         }
         matchList.innerHTML = matches.map(match => `
-          <article class="match-card">
+          <article class="match-card ${seenMatchIds.has(match.match_id) ? '' : 'new-match'}">
             <span class="match-score">${match.score}% match</span>
             <h3>You matched with ${escapeHtml(match.name)}</h3>
             <div class="why-row">
@@ -932,6 +995,7 @@
                   <button class="block-match" data-match="${match.match_id}" data-decision="block">Block</button>
                 </div>`}
           </article>`).join('');
+        matches.forEach(match => seenMatchIds.add(match.match_id));
         matchList.querySelectorAll('[data-decision]').forEach(control => control.addEventListener('click', decideMatch));
         matchList.querySelectorAll('.listen-why').forEach(control => control.addEventListener('click', listenToMatch));
       }
@@ -980,10 +1044,12 @@
         const control = event.currentTarget;
         control.disabled = true;
         try {
+          const decision = control.dataset.decision;
           await requestJson(`/api/matches/${control.dataset.match}/decision`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ decision: control.dataset.decision })
+            body: JSON.stringify({ decision })
           });
+          showSuccess(decision === 'accept' ? 'Connection request saved' : 'Choice saved');
           await loadMatching();
         } catch (error) {
           control.disabled = false;
@@ -1056,6 +1122,22 @@
       function setStatus(message, listening = false) {
         status.textContent = message;
         status.classList.toggle('pulse', listening);
+        const normalized = message.toLowerCase();
+        const state = listening || normalized.includes('listening')
+          ? 'listening'
+          : normalized.includes('thinking') || normalized.includes('make sure i heard')
+            ? 'thinking'
+            : normalized.includes('speaking') || normalized.includes('responding')
+              ? 'speaking'
+              : 'idle';
+        talkHero.dataset.state = state;
+      }
+
+      function showSuccess(message) {
+        clearTimeout(successTimer);
+        successMessage.textContent = message;
+        successToast.classList.remove('hidden');
+        successTimer = setTimeout(() => successToast.classList.add('hidden'), 2400);
       }
     </script>
   </body>
