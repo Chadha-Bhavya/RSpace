@@ -159,6 +159,7 @@ class TestOpenAIReplyProvider(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parts, ["That sounds ", "meaningful."])
         self.assertTrue(client.request["json"]["stream"])
         self.assertEqual(client.request["json"]["max_output_tokens"], 180)
+        self.assertEqual(client.request["json"]["reasoning"]["effort"], "low")
 
 
 if __name__ == "__main__":
